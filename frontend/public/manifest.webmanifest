@@ -1,0 +1,7 @@
+{
+  "id": "/", "name": "金笺 · 黄金 ETF", "short_name": "金笺", "lang": "zh-CN",
+  "description": "个人黄金 ETF 持仓记账与价格提醒",
+  "start_url": "/", "scope": "/", "display": "standalone",
+  "background_color": "#f7f6f1", "theme_color": "#f7f5ef",
+  "icons": [{"src": "/static/icons/app.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}
