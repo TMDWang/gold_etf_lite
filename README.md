@@ -21,9 +21,16 @@
 
 ## 飞牛 NAS 首次安装
 
-将整个 `gold-etf-lite` 文件夹放到 NAS 上，例如 `/vol1/1000/docker/gold-etf-lite`。文件夹内必须有本说明、`compose.yaml`、`Dockerfile` 和代码目录。不要把 `sources/` 或整个 ChatGPT 项目当作构建目录。
+项目采用“本地修改并上传 GitHub，飞牛 NAS 拉取代码并重建 Docker”的流程。首次在 NAS 的终端进入**已经存在的** Docker 应用目录，例如 `/vol1/1000/docker`，然后克隆：
 
-1. 在 NAS 的终端进入此文件夹。以下命令都在此处执行。
+```sh
+git clone https://github.com/TMDWang/gold_etf_lite.git
+cd gold_etf_lite
+```
+
+目录 `/vol1/1000/docker` 仅为示例，请使用飞牛上实际存在的路径。上述命令会创建 `gold_etf_lite` 文件夹，已有同名文件夹时不要覆盖；先确认该目录是什么。NAS 需要可用的 Git、Docker Compose 和外网访问。以下命令均在克隆出来的 `gold_etf_lite` 目录执行。
+
+1. 在 NAS 的终端进入克隆出来的项目文件夹。
 2. 生成配置。已有 `.env` 时不要重复生成或替换密钥：
 
 ```sh
@@ -90,12 +97,44 @@ docker compose exec app python manage.py backup
 
 ## 更新与数据目录
 
+### 本地修改并上传
+
+在电脑上也单独克隆一次仓库，以这个克隆目录作为今后本地修改的工作目录：
+
 ```sh
-docker compose build
-docker compose up -d
+git clone https://github.com/TMDWang/gold_etf_lite.git
+cd gold_etf_lite
 ```
 
-启动自动运行数据库迁移。更新前先做备份，保留旧版源码包与 `.env`；数据库升级后不要直接用旧代码回退。不要运行 `docker compose down -v` 或删除 `data/postgres`。
+当前 ChatGPT 项目中的 `gold-etf-lite` 文件夹本身不是 Git 仓库。以后在上面新克隆的 `gold_etf_lite` 目录里修改，检查并提交需要的源码，再推送：
+
+```sh
+git status
+git add .
+git status
+git commit -m "描述本次修改"
+git push origin main
+```
+
+推送需要配置 GitHub 登录或其他具有写入权限的认证方式；GitHub 仓库为公开状态。提交前检查 `git status` 输出，确保没有个人数据、密钥或备份。`.env*`（示例文件除外）、数据库、备份和依赖目录已在 `.gitignore` 中排除；不要强制添加它们。
+
+### 飞牛拉取并更新
+
+在 NAS 终端进入**首次克隆时的同一个目录**，先检查：
+
+```sh
+git status --short --branch
+```
+
+确认当前分支为 `main`，且没有待处理的本地源码修改。然后在应用正在运行时执行：
+
+```sh
+docker compose exec app python manage.py backup && git pull --ff-only origin main && docker compose up -d --build && docker compose ps
+```
+
+命令按顺序备份、拉取、构建、重启并检查；某一步失败后不会继续后续步骤。`--ff-only` 不会自动合并分叉的历史。如果状态显示源码有修改或拉取失败，请先保留现场并检查原因，不要使用强制重置或清理命令。备份需要当前应用和数据库正常运行；如果备份失败，先处理故障。
+
+启动自动运行数据库迁移。更新前保留旧版本信息与 `.env`；数据库升级后不要直接用旧代码回退。重新构建或重建容器会沿用同一目录下的数据挂载；不要运行 `docker compose down -v`、删除项目目录或删除 `data/postgres`。恢复步骤见下方链接。
 
 | 位置 | 含义 |
 | --- | --- |
