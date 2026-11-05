@@ -21,8 +21,13 @@ COPY requirements.lock ./
 RUN pip install --no-cache-dir --index-url "$PYPI_INDEX_URL" -r requirements.lock
 COPY . .
 COPY --from=frontend /build/dist ./frontend/dist
-RUN SECRET_KEY=build-only DEBUG=1 python manage.py collectstatic --noinput && \
-    useradd --uid 10001 --create-home appuser && mkdir -p /backups && chown appuser:appuser /backups
+# NAS filesystems can supply mode 000 in the build context. These are application
+# sources only (.dockerignore excludes private data and configuration).
+RUN useradd --uid 10001 --create-home appuser && \
+    chmod -R a+rX /app && \
+    su -s /bin/sh appuser -c 'SECRET_KEY=build-only DEBUG=1 python -c "from config.wsgi import application; from pathlib import Path; assert Path(\"frontend/dist/index.html\").read_bytes()"' && \
+    SECRET_KEY=build-only DEBUG=1 python manage.py collectstatic --noinput && \
+    mkdir -p /backups && chown appuser:appuser /backups
 EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sh", "deploy/start.sh"]
