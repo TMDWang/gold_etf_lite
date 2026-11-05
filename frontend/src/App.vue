@@ -139,7 +139,14 @@ onBeforeUnmount(()=>{bootstrapVersion++;loader.reset();shellWorker?.dispose();cl
       </template>
       <footer class="page-footer">按自己的计划，慢慢来。<br><span>仅做提醒与记账，实际交易以券商记录为准。</span></footer>
     </main>
-    <van-tabbar v-model="tab" active-color="#936d28" inactive-color="#97968e" safe-area-inset-bottom><van-tabbar-item name="home" icon="home-o">首页</van-tabbar-item><van-tabbar-item :disabled="!initialized" name="plans" icon="todo-list-o">计划</van-tabbar-item><van-tabbar-item :disabled="!initialized" name="alerts" icon="bell">提醒</van-tabbar-item><van-tabbar-item :disabled="!initialized" name="history" icon="records-o">记录</van-tabbar-item></van-tabbar>
+    <van-tabbar v-model="tab" active-color="#936d28" inactive-color="#97968e" safe-area-inset-bottom>
+      <van-tabbar-item name="home" :icon="tab==='home'?'wap-home':'wap-home-o'">首页</van-tabbar-item>
+      <van-tabbar-item :disabled="!initialized" name="plans" :icon="tab==='plans'?'todo-list':'todo-list-o'">计划</van-tabbar-item>
+      <van-tabbar-item :disabled="!initialized" name="alerts">
+        <template #icon="{ active }"><svg class="tab-bell" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.5c0 .9-.4 1.7-1.1 2.3l-.9.7V17h16v-1.5l-.9-.7c-.7-.6-1.1-1.4-1.1-2.3V9a6 6 0 0 0-6-6Z" :fill="active?'currentColor':'none'" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></template>提醒
+      </van-tabbar-item>
+      <van-tabbar-item :disabled="!initialized" name="history" :icon="tab==='history'?'records':'records-o'">记录</van-tabbar-item>
+    </van-tabbar>
   </div>
 
   <van-popup :show="!!popup" position="bottom" round closeable :close-on-click-overlay="!busy" @update:show="v=>{if(!v&&!busy)popup=''}" class="form-popup" safe-area-inset-bottom>

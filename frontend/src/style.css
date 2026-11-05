@@ -13,3 +13,5 @@
 .page-heading{flex-wrap:wrap}
 .status-pill{white-space:normal}
 @media(max-width:355px){.status-pill{font-size:12px}.page-heading{gap:8px}.price{font-size:40px}}
+
+.tab-bell{display:block;width:1em;height:1em}
