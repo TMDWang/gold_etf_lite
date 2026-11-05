@@ -45,3 +45,24 @@ test('session expiry clears private state and prevents sibling late writes',asyn
   const pending=loader.run('plans');await loader.run('account');later.resolve('private response');await pending
   assert.equal(expired,1);assert.deepEqual(plans.values,[])
 })
+test('invalidating pending requests preserves displayed values and prevents stale results',async()=>{
+ const late=deferred(),account=section(()=>late.promise);account.values.push('displayed')
+ const loader=createSectionLoader({sections:{account}});const pending=loader.run('account')
+ loader.invalidate();assert.deepEqual(account.values,['displayed']);assert.equal(account.state.pending,false)
+ late.resolve('stale');await pending;assert.deepEqual(account.values,['displayed'])
+})
+test('recent successful section data is reused only until expiry, and force bypasses reuse',async()=>{
+ let now=1000,calls=0;const account=section(async()=>++calls)
+ const loader=createSectionLoader({sections:{account},now:()=>now})
+ await loader.run('account',{maxAgeMs:5000});now+=4000
+ await loader.run('account',{maxAgeMs:5000});assert.equal(calls,1)
+ await loader.run('account',{maxAgeMs:5000,force:true});assert.equal(calls,2)
+ now+=5001;await loader.run('account',{maxAgeMs:5000});assert.equal(calls,3)
+ loader.reset();await loader.run('account',{maxAgeMs:5000});assert.equal(calls,4)
+})
+test('failed refresh is surfaced and is not hidden by a recent cached value',async()=>{
+ let calls=0,now=1000;const account=section(async()=>{calls++;if(calls===2)throw Error('offline');return calls})
+ const loader=createSectionLoader({sections:{account},now:()=>now})
+ await loader.run('account',{maxAgeMs:5000});await loader.run('account',{force:true,maxAgeMs:5000})
+ assert.equal(account.state.error,'offline');await loader.run('account',{maxAgeMs:5000});assert.equal(calls,3);assert.equal(account.state.error,'')
+})

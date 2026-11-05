@@ -35,7 +35,7 @@ const loader=createSectionLoader({sections,onUnauthorized(){requests.invalidate(
 function clearPrivateForms(){closeDialog();popup.value='';deliveries.value=[];admins.value=[];publicRules.value=[];Object.assign(groupSettings,{topic:'',token:'',token_bound:false});system.value=null;invite.value='';Object.keys(form).forEach(k=>delete form[k]);Object.assign(settings,{fee_rate:'',fee_minimum:'',fee_extra:'',reminder_minutes:30,reminder_max:3,push_token:'',token_bound:false});Object.assign(init,{budget:'',cash:'',shares:'0',unit_cost:'0'});Object.assign(buyPreviewForm,{price:'',quantity:'100',fee:''});buyPreviewResult.value=null;previewRevision++;cashForm.amount='';cashForm.reason='';passwords.old_password='';passwords.new_password='';credentials.password='';entryPage.value=1;tab.value='home'}
 function resetPrivate(){requests.invalidate();loader.reset();clearPrivateForms()}
 const activePlans=computed(()=>plans.value.filter(p=>p.status==='ACTIVE'))
-const price=computed(()=>market.value.quote?.price)
+const price=computed(()=>tab.value==='holdings'?(account.value?.reference_quote?.price||market.value.quote?.price):(market.value.quote?.price||account.value?.reference_quote?.price))
 const pnlClass=v=>Number(v)>0?'gain':Number(v)<0?'loss':''
 const fmtTime=v=>v?new Date(v).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'暂无'
 const initialized=computed(()=>!!account.value?.initialized_at)
@@ -43,8 +43,10 @@ const liveEpisodes=computed(()=>episodes.value.filter(e=>['OPEN','UNKNOWN'].incl
 async function action(fn) { if(busy.value)return;busy.value=true;try{await fn()}catch(e){if(e!=='cancel'&&e!=='close'&&e.code!=='CANCELLED')showToast({message:e.message||'操作未完成，请重试',duration:4000})}finally{busy.value=false} }
 function refresh({force=false}={}) {
   if (!me.value) return
-  const keys=force?['account','market','plans','episodes','entries','alerts','publicAlerts']:tab.value==='holdings'?['account','market','entries']:tab.value==='alerts'?['account','market','alerts','publicAlerts']:tab.value==='plans'?['account','plans']:['account','market','plans','episodes']
-  for(const key of keys)void loader.run(key,{force})
+  if(force)loader.invalidate()
+  const keys=tab.value==='holdings'?['account','entries']:tab.value==='alerts'?['account','alerts','publicAlerts']:tab.value==='plans'?['account','plans']:['account','market','plans','episodes']
+  const ages={account:15000,market:20000,episodes:20000,plans:60000,entries:60000,alerts:60000,publicAlerts:60000}
+  for(const key of keys)void loader.run(key,{force,maxAgeMs:ages[key]})
 }
 async function bootstrap(){const version=++bootstrapVersion;loading.value=true;startupError.value='';try{const [,user]=await Promise.all([api('/auth/csrf/'),api('/me/')]);if(version!==bootstrapVersion)return;resetPrivate();me.value=user;refresh()}catch(e){if(version!==bootstrapVersion)return;if(![401,403].includes(e.status))startupError.value=e.message;me.value=null}finally{if(version===bootstrapVersion)loading.value=false}}
 async function authenticate(){await action(async()=>{authError.value='';await api('/auth/csrf/');await post(`/auth/${authMode.value}/`,credentials);const user=await api('/me/');resetPrivate();me.value=user;refresh()})}
@@ -96,7 +98,7 @@ const safeToUpdate=computed(()=>{
 watch(safeToUpdate,ready=>{if(ready)applyUpdate()})
 watch(()=>[buyPreviewForm.price,buyPreviewForm.quantity,buyPreviewForm.fee,account.value?.cash,account.value?.shares,account.value?.cost_basis],()=>{previewRevision++;buyPreviewResult.value=null},{flush:'sync'})
 watch(tab,()=>refresh())
-onMounted(()=>{shellWorker=registerShellWorker(()=>{updateAvailable.value=true});void bootstrap();timer=setInterval(()=>{if(document.visibilityState==='visible'){refresh();shellWorker?.check()}},30000);document.addEventListener('visibilitychange',onVisible);window.addEventListener('online',onOnline)})
+onMounted(()=>{shellWorker=registerShellWorker(()=>{updateAvailable.value=true},undefined,undefined,()=>safeToUpdate.value);void bootstrap();timer=setInterval(()=>{if(document.visibilityState==='visible'){refresh();shellWorker?.check()}},30000);document.addEventListener('visibilitychange',onVisible);window.addEventListener('online',onOnline)})
 onBeforeUnmount(()=>{bootstrapVersion++;loader.reset();shellWorker?.dispose();clearInterval(timer);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('online',onOnline)})
 </script>
 

@@ -16,7 +16,7 @@ def account_data(a):
     q=Quote.objects.order_by('-source_at','-pk').first()
     value=q.price*a.shares if q else None
     floating=value-a.cost_basis if value is not None else None
-    return {'budget':str(a.budget),'cash':str(a.cash),'shares':a.shares,'cost_basis':str(a.cost_basis),'unit_cost':str(a.cost_basis/a.shares) if a.shares else None,'realized':str(a.realized),'initialized_at':a.initialized_at,'initial_cash':str(a.initial_cash),'initial_shares':a.initial_shares,'initial_cost':str(a.initial_cost),'market_value':str(value) if value is not None else None,'floating':str(floating) if floating is not None else None,'total_profit':str(a.realized+floating) if floating is not None else None}
+    return {'budget':str(a.budget),'cash':str(a.cash),'shares':a.shares,'cost_basis':str(a.cost_basis),'unit_cost':str(a.cost_basis/a.shares) if a.shares else None,'realized':str(a.realized),'initialized_at':a.initialized_at,'initial_cash':str(a.initial_cash),'initial_shares':a.initial_shares,'initial_cost':str(a.initial_cost),'market_value':str(value) if value is not None else None,'floating':str(floating) if floating is not None else None,'total_profit':str(a.realized+floating) if floating is not None else None,'reference_quote':{'price':str(q.price),'source_at':q.source_at} if q else None}
 
 def entry_data(e,replacements=None):
     return {'id':e.pk,'kind':e.kind,'payload':e.payload,'reason':e.reason,'corrects':e.corrects_id,'plan':e.plan_id,'created_at':e.created_at,'corrected':e.pk in (replacements or {}),'effective_payload':(replacements or {}).get(e.pk)}

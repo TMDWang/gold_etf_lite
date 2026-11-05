@@ -5,7 +5,7 @@ import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
 import {createSectionLoader,createSessionRequests,resolveEpisodePlan} from '../src/loading.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,popup,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,setWorker(w){shellWorker=w}}`)(deps)}
+function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
@@ -46,4 +46,14 @@ test('an old buy preview response is discarded after the inputs change',async()=
 test('reset clears any personal buy preview',()=>{
  const s=app(async()=>[]);s.buyPreviewForm.price='4';s.buyPreviewResult.value={after:{cash:'10'}}
  s.resetPrivate();assert.equal(s.buyPreviewForm.price,'');assert.equal(s.buyPreviewResult.value,null)
+})
+test('holdings refresh does not download unused intraday curve',()=>{
+ const paths=[];const s=app(async path=>{paths.push(path);return path.startsWith('/entries/')?{results:[],count:0}:{initialized_at:'now'}})
+ s.me.value={id:1};s.tab.value='holdings';s.refresh()
+ assert.ok(paths.includes('/account/'));assert.ok(paths.some(x=>x.startsWith('/entries/')));assert.ok(!paths.includes('/market/'))
+})
+test('post-write refresh fetches only visible page data',()=>{
+ const paths=[];const s=app(async path=>{paths.push(path);return path==='/account/'?{initialized_at:'now'}:path==='/market/'?{points:[]}:[]})
+ s.me.value={id:1};s.refresh({force:true})
+ assert.ok(paths.includes('/account/'));assert.ok(paths.includes('/market/'));assert.ok(!paths.some(x=>x.startsWith('/entries/')));assert.ok(!paths.includes('/public-alerts/'))
 })

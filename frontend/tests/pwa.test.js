@@ -4,7 +4,13 @@ import {shellCacheConfig} from '../scripts/cache-config.js'
 import {registerShellWorker} from '../src/pwa.js'
 test('worker caches only generic shell and static assets, never private API or other navigations',()=>{
   const config=shellCacheConfig('dist','abc')
-  assert.deepEqual(config.runtimeCaching,[])
+  assert.ok(config.globIgnores.includes('assets/PriceChart-*.js'))
+  assert.equal(config.runtimeCaching.length,1)
+  const chart=config.runtimeCaching[0]
+  assert.equal(chart.handler,'CacheFirst')
+  assert.equal(chart.urlPattern({url:new URL('https://example.test/static/assets/PriceChart-abc.js'),sameOrigin:true}),true)
+  assert.equal(chart.urlPattern({url:new URL('https://example.test/api/account/'),sameOrigin:true}),false)
+  assert.equal(chart.urlPattern({url:new URL('https://other.test/static/assets/PriceChart-abc.js'),sameOrigin:false}),false)
   assert.deepEqual(config.additionalManifestEntries,[{url:'/',revision:'abc'}])
   assert.equal(config.skipWaiting,false)
   assert.equal(config.navigateFallback,'/')
@@ -34,5 +40,16 @@ test('a later update check detects an already waiting worker',async()=>{
   const shell=registerShellWorker(()=>updateNotice++,{serviceWorker:container},{reload(){}})
   await Promise.resolve();shell.check();await Promise.resolve();await Promise.resolve()
   assert.equal(updateNotice,1)
+  shell.dispose()
+})
+
+test('a worker activation that completes while a form is open waits before reload',async()=>{
+  let safe=true,reloads=0,onController
+  const worker={postMessage(){}}
+  const reg={installing:null,waiting:worker,addEventListener(){},update:async()=>{}}
+  const container={controller:{},addEventListener(name,fn){if(name==='controllerchange')onController=fn},removeEventListener(){},register:async()=>reg}
+  const shell=registerShellWorker(()=>{}, {serviceWorker:container}, {reload(){reloads++}}, ()=>safe)
+  await Promise.resolve();shell.activate();safe=false;reg.waiting=null;onController()
+  assert.equal(reloads,0);safe=true;shell.activate();assert.equal(reloads,1)
   shell.dispose()
 })

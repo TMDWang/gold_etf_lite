@@ -20,21 +20,29 @@ export function createSessionRequests({request,submit}) {
 }
 
 /** Independent sections, with response ownership across retries, logout and account changes. */
-export function createSectionLoader({sections, onUnauthorized = () => {}}) {
+export function createSectionLoader({sections, onUnauthorized = () => {}, now = () => Date.now()}) {
   let epoch = 0
   const active = new Map()
-  function reset() {
+  const lastSuccess = new Map()
+  function invalidate() {
     epoch++
     for (const job of active.values()) job.controller.abort()
     active.clear()
+    lastSuccess.clear()
+    for (const section of Object.values(sections)) section.state.pending=false
+  }
+  function reset() {
+    invalidate()
     for (const section of Object.values(sections)) {
       section.state.pending = false;section.state.error = '';section.clear?.()
     }
   }
-  function run(key, {force = false} = {}) {
+  function run(key, {force = false, maxAgeMs = 0} = {}) {
     const section = sections[key]
     if (!section) throw new Error(`Unknown section: ${key}`)
     if (active.has(key) && !force) return active.get(key).promise
+    const updated=lastSuccess.get(key)
+    if(!force && !section.state.error && updated!==undefined && maxAgeMs>0 && now()>=updated && now()-updated<maxAgeMs)return Promise.resolve()
     active.get(key)?.controller.abort()
     const job = {controller: new AbortController(), epoch}
     active.set(key, job);section.state.pending = true;section.state.error = ''
@@ -42,7 +50,7 @@ export function createSectionLoader({sections, onUnauthorized = () => {}}) {
     job.promise = (async () => {
       try {
         const value = await section.load({signal: job.controller.signal})
-        if (owns()) section.apply(value)
+        if (owns()) {section.apply(value);lastSuccess.set(key,now())}
       } catch (error) {
         if (!owns()) return
         if ([401, 403].includes(error.status)) {reset();onUnauthorized()}
@@ -53,5 +61,5 @@ export function createSectionLoader({sections, onUnauthorized = () => {}}) {
     })()
     return job.promise
   }
-  return {run, reset}
+  return {run, reset, invalidate}
 }

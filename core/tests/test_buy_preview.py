@@ -2,7 +2,7 @@ from decimal import Decimal as D
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
-from core.models import User, Account, Entry
+from core.models import User, Account, Entry, Quote
 
 class BuyPreviewTests(TestCase):
     def setUp(self):
@@ -31,3 +31,9 @@ class BuyPreviewTests(TestCase):
         self.user.fee_rate=None;self.user.save()
         self.assertEqual(self.client.post('/api/account/buy-preview/',{'price':'4','quantity':100},format='json').status_code,400)
         self.assertEqual(self.client.post('/api/account/buy-preview/',{'price':'4','quantity':100,'fee':'0'},format='json').status_code,200)
+
+    def test_account_includes_latest_reference_quote_without_intraday_points(self):
+        Quote.objects.create(price=D('4.123'),previous_close=D('4'),source='test',source_at=timezone.now())
+        data=self.client.get('/api/account/').json()
+        self.assertEqual(D(data['reference_quote']['price']),D('4.123'))
+        self.assertIn('source_at',data['reference_quote']);self.assertNotIn('points',data)
