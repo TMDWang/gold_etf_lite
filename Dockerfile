@@ -25,7 +25,7 @@ COPY --from=frontend /build/dist ./frontend/dist
 # sources only (.dockerignore excludes private data and configuration).
 RUN useradd --uid 10001 --create-home appuser && \
     chmod -R a+rX /app && \
-    su -s /bin/sh appuser -c 'SECRET_KEY=build-only DEBUG=1 python -c "from config.wsgi import application; from pathlib import Path; assert Path(\"frontend/dist/index.html\").read_bytes()"' && \
+    su -s /bin/sh appuser -c 'SECRET_KEY=build-only DEBUG=1 python -c "from config.wsgi import application; from config.asgi import application as async_application; from pathlib import Path; assert Path(\"frontend/dist/index.html\").read_bytes()"' && \
     SECRET_KEY=build-only DEBUG=1 python manage.py collectstatic --noinput && \
     mkdir -p /backups && chown appuser:appuser /backups
 EXPOSE 8000

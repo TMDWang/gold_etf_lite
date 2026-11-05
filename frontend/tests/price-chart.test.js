@@ -1,6 +1,12 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {tradingChartData} from '../src/price-chart.js'
+import {tradingChartData,chartExtremes} from '../src/price-chart.js'
+
+test('highest and lowest are derived only from visible sampled prices',()=>{
+  const points=[{at:'2026-11-05T09:30:00+08:00',price:'5.003'},{at:'2026-11-05T10:00:00+08:00',price:'5.123'},{at:'2026-11-05T11:45:00+08:00',price:'8.000'},{at:'2026-11-05T14:00:00+08:00',price:'4.991'}]
+  assert.deepEqual(chartExtremes(points),{high:5.123,low:4.991})
+  assert.deepEqual(chartExtremes([]),{high:null,low:null})
+})
 
 test('compresses lunch while preserving trading-minute gaps',()=>{
   const result=tradingChartData([

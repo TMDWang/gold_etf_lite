@@ -23,3 +23,8 @@ export function tradingChartData(points) {
   }
   return {times,prices}
 }
+
+export function chartExtremes(points) {
+  const values=tradingChartData(points).prices.filter(value=>value!==null)
+  return values.length?{high:Math.max(...values),low:Math.min(...values)}:{high:null,low:null}
+}

@@ -8,6 +8,16 @@ class DeploymentTests(SimpleTestCase):
         self.assertGreater(dockerfile.index('chmod -R a+rX /app'),dockerfile.index('COPY --from=frontend'))
         self.assertIn("su -s /bin/sh appuser",dockerfile)
         self.assertIn('from config.wsgi import application',dockerfile)
+        self.assertIn('from config.asgi import application',dockerfile)
+
+    def test_web_runs_async_server_with_async_middleware(self):
+        from importlib import import_module
+        config=configparser.ConfigParser();config.read(settings.BASE_DIR/'deploy'/'supervisord.conf')
+        command=config.get('program:web','command')
+        self.assertIn('uvicorn config.asgi:application',command)
+        for path in settings.MIDDLEWARE:
+            module,name=path.rsplit('.',1);middleware=getattr(import_module(module),name)
+            self.assertTrue(getattr(middleware,'async_capable',False),path)
 
     def test_supervisor_owns_root_log_pipes_workers_are_unprivileged(self):
         config=configparser.ConfigParser()

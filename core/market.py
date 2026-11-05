@@ -138,3 +138,21 @@ def market_data():
     if not calendar_valid:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
     if settings.PAUSE_NOTIFICATIONS:message='维护模式：自动提醒已暂停，可核对账目及计划'
     return {'backend_version':backend_version(),'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at,'fetched_at':q.fetched_at} if q else None,'fresh':fresh and calendar_valid and not settings.PAUSE_NOTIFICATIONS,'session_open':is_trading(now),'message':message,'calendar_until':calendar_until,'notifications_paused':settings.PAUSE_NOTIFICATIONS,'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,'curve_date':str(today),'points':[{'at':m.at,'price':str(m.price)} for m in points],'curve_note':'含采集时点数据；缺失区间留空，不是完整分钟历史。' if sampled else '显示今天已取得的分钟数据；缺失区间留空。'}
+
+def price_data():
+    """Small shared quote snapshot: no account data or full chart history."""
+    now=timezone.now();today=now.astimezone(CN).date();q=Quote.objects.order_by('-source_at','-pk').first()
+    state=SystemState.objects.filter(pk='market').values_list('value',flat=True).first() or {}
+    open_now=is_trading(now);fresh=quote_fresh(q,now) and open_now and state.get('available',True)
+    start=datetime.combine(today,time.min,tzinfo=CN)
+    point=Minute.objects.filter(at__gte=start,at__lt=start+timedelta(days=1)).order_by('-at').first()
+    try:calendar_until=str(trading_calendar().last_session.date())
+    except Exception:calendar_until='不可用'
+    calendar_valid=calendar_until!='不可用' and str(today)<=calendar_until
+    message=state.get('message','等待首次采集；行情未就绪时到价提醒暂停')
+    if not calendar_valid:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
+    if settings.PAUSE_NOTIFICATIONS:message='维护模式：自动提醒已暂停，可核对账目及计划'
+    return {'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at.isoformat(),'fetched_at':q.fetched_at.isoformat()} if q else None,
+        'fresh':fresh and calendar_valid and not settings.PAUSE_NOTIFICATIONS,'session_open':open_now,'message':message,
+        'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,
+        'curve_date':str(today),'latest_point':{'at':point.at.isoformat(),'price':str(point.price)} if point else None}

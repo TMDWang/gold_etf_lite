@@ -5,7 +5,7 @@ import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
 import {createSectionLoader,createSessionRequests,resolveEpisodePlan} from '../src/loading.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,setWorker(w){shellWorker=w}}`)(deps)}
+function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,applyPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
@@ -56,4 +56,23 @@ test('post-write refresh fetches only visible page data',()=>{
  const paths=[];const s=app(async path=>{paths.push(path);return path==='/account/'?{initialized_at:'now'}:path==='/market/'?{points:[]}:[]})
  s.me.value={id:1};s.refresh({force:true})
  assert.ok(paths.includes('/account/'));assert.ok(paths.includes('/market/'));assert.ok(!paths.some(x=>x.startsWith('/entries/')));assert.ok(!paths.includes('/public-alerts/'))
+})
+test('a price event updates the curve and display valuation without mutating the ledger',()=>{
+ const s=app(async()=>[]);s.me.value={id:1};s.account.value={initialized_at:'now',shares:100,cash:'500',cost_basis:'400',realized:'3',reference_quote:{price:'4',source_at:'2026-11-05T02:00:00Z'}}
+ s.market.value={curve_date:'2026-11-05',points:[{at:'2026-11-05T02:00:00Z',price:'4'}]}
+ s.applyPrice({quote:{price:'4.5',source_at:'2026-11-05T02:01:00Z'},fresh:true,curve_date:'2026-11-05',latest_point:{at:'2026-11-05T02:01:00Z',price:'4.5'}})
+ assert.equal(s.market.value.points.length,2);assert.equal(s.holdingValue.value,450);assert.equal(s.holdingFloating.value,50)
+ assert.equal(s.account.value.cash,'500');assert.equal(s.account.value.cost_basis,'400')
+})
+test('a delayed event from an earlier trading day cannot overwrite a newer chart',()=>{
+ const s=app(async()=>[]);s.me.value={id:1}
+ s.market.value={curve_date:'2026-11-06',quote:{price:'4',source_at:'2026-11-05T07:00:00Z'},points:[]}
+ s.applyPrice({curve_date:'2026-11-05',quote:{price:'4',source_at:'2026-11-05T07:00:00Z'},latest_point:{at:'2026-11-05T07:00:00Z',price:'4'}})
+ assert.equal(s.market.value.curve_date,'2026-11-06');assert.deepEqual(s.market.value.points,[])
+})
+test('a status-only event updates availability without changing the displayed price',()=>{
+ const s=app(async()=>({}));s.me.value={id:1}
+ s.market.value={quote:{price:'4.000',source_at:'2026-11-05T02:00:00Z'},fresh:true,session_open:true,curve_date:'2026-11-05',points:[]}
+ s.applyPrice({status_only:true,fresh:false,session_open:false,curve_date:'2026-11-05',message:'休市'})
+ assert.equal(s.market.value.quote.price,'4.000');assert.equal(s.market.value.fresh,false);assert.equal(s.market.value.message,'休市')
 })

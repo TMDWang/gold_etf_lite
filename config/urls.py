@@ -3,6 +3,7 @@ from django.conf import settings
 from django.db import connection
 from django.urls import path
 from core import auth_views as a, views as v
+from core.price_stream import quote_stream
 
 def health(request):
     from core.monitor import worker_ok
@@ -43,6 +44,6 @@ urlpatterns = [
     path('api/admin/group-push/',v.GroupPushView.as_view()),
     path('api/episodes/',v.EpisodesView.as_view()),path('api/episodes/<int:pk>/ignore/',v.IgnoreView.as_view()),
     path('api/settings/',v.SettingsView.as_view()),path('api/settings/test-push/',v.TestPushView.as_view()),path('api/deliveries/',v.DeliveryView.as_view()),
-    path('api/market/',v.MarketView.as_view()),path('api/admin/invites/',a.InvitesView.as_view()),
+    path('api/market/',v.MarketView.as_view()),path('api/quote/',v.QuoteView.as_view()),path('api/quote/stream/',quote_stream),path('api/admin/invites/',a.InvitesView.as_view()),
     path('api/admin/users/',a.AdminUsersView.as_view()),path('api/admin/users/<int:pk>/',a.AdminUsersView.as_view()),path('api/admin/system/',v.SystemView.as_view()),
 ]

@@ -284,6 +284,11 @@ class MarketView(APIView):
         from core.market import market_data
         return Response(market_data())
 
+class QuoteView(APIView):
+    def get(self,request):
+        from core.market import price_data
+        return Response(price_data())
+
 class SystemView(APIView):
     permission_classes=[AppAdmin]
     def get(self,request):

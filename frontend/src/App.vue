@@ -4,6 +4,7 @@ import { showToast, showSuccessToast, showConfirmDialog, closeDialog } from 'van
 import SectionStatus from './components/SectionStatus.vue'
 import { createSectionLoader, createSessionRequests, resolveEpisodePlan } from './loading'
 import { registerShellWorker } from './pwa'
+import { createPriceStream } from './price-stream'
 import { api as rawApi, post as rawPost } from './api'
 import { money, signed, tradePreview, beijingInput, backupSummary, formatRelease } from './display'
 
@@ -18,14 +19,16 @@ const form=reactive({}), entryKey=ref(''), cashForm=reactive({amount:'',reason:'
 const buyPreviewForm=reactive({price:'',quantity:'100',fee:''}), buyPreviewResult=ref(null)
 let previewRevision=0
 let timer
-let shellWorker,bootstrapVersion=0
+let shellWorker,quoteStream,latestPriceEvent=null,bootstrapVersion=0
 const requests=createSessionRequests({request:rawApi,submit:rawPost})
 const api=(...args)=>requests.request(...args)
 const post=(...args)=>requests.submit(...args)
-const sectionState=reactive(Object.fromEntries(['account','market','plans','episodes','entries','alerts','publicAlerts'].map(k=>[k,{pending:false,error:''}])))
+const sectionState=reactive(Object.fromEntries(['account','market','quote','plans','episodes','entries','alerts','publicAlerts'].map(k=>[k,{pending:false,error:''}])))
+const streamState=ref('stopped')
 const sections={
   account:{state:sectionState.account,load:opts=>api('/account/',opts),apply:v=>{account.value=v},clear:()=>{account.value=null}},
-  market:{state:sectionState.market,load:opts=>api('/market/',opts),apply:v=>{market.value=v},clear:()=>{market.value={points:[]}}},
+  market:{state:sectionState.market,load:opts=>api('/market/',opts),apply:applyMarketSnapshot,clear:()=>{market.value={points:[]};latestPriceEvent=null}},
+  quote:{state:sectionState.quote,load:opts=>api('/quote/',opts),apply:applyPrice},
   plans:{state:sectionState.plans,load:opts=>api('/plans/',opts),apply:v=>{plans.value=v},clear:()=>{plans.value=[]}},
   episodes:{state:sectionState.episodes,load:opts=>api('/episodes/',opts),apply:v=>{episodes.value=v},clear:()=>{episodes.value=[]}},
   entries:{state:sectionState.entries,load:opts=>api(`/entries/?page=${entryPage.value}`,opts),apply:v=>{entries.value=v.results;entryCount.value=v.count},clear:()=>{entries.value=[];entryCount.value=0}},
@@ -34,13 +37,41 @@ const sections={
 }
 const loader=createSectionLoader({sections,onUnauthorized(){requests.invalidate();me.value=null;clearPrivateForms();showToast('登录已过期或账号已停用，请重新登录')}})
 function clearPrivateForms(){closeDialog();popup.value='';deliveries.value=[];admins.value=[];publicRules.value=[];Object.assign(groupSettings,{topic:'',token:'',token_bound:false});system.value=null;invite.value='';Object.keys(form).forEach(k=>delete form[k]);Object.assign(settings,{fee_rate:'',fee_minimum:'',fee_extra:'',reminder_minutes:30,reminder_max:3,push_token:'',token_bound:false});Object.assign(init,{budget:'',cash:'',shares:'0',unit_cost:'0'});Object.assign(buyPreviewForm,{price:'',quantity:'100',fee:''});buyPreviewResult.value=null;previewRevision++;cashForm.amount='';cashForm.reason='';passwords.old_password='';passwords.new_password='';credentials.password='';entryPage.value=1;tab.value='home'}
-function resetPrivate(){requests.invalidate();loader.reset();clearPrivateForms()}
+function resetPrivate(){quoteStream?.stop();requests.invalidate();loader.reset();clearPrivateForms()}
 const activePlans=computed(()=>plans.value.filter(p=>p.status==='ACTIVE'))
-const price=computed(()=>tab.value==='holdings'?(account.value?.reference_quote?.price||market.value.quote?.price):(market.value.quote?.price||account.value?.reference_quote?.price))
+const price=computed(()=>{const a=account.value?.reference_quote,m=market.value.quote;if(!m)return a?.price;if(!a)return m.price;return Date.parse(m.source_at)>=Date.parse(a.source_at)?m.price:a.price})
+const holdingValue=computed(()=>price.value!=null&&account.value?Number(price.value)*Number(account.value.shares):account.value?.market_value)
+const holdingFloating=computed(()=>holdingValue.value!=null&&account.value?Number(holdingValue.value)-Number(account.value.cost_basis):null)
+const holdingTotal=computed(()=>holdingFloating.value!=null&&account.value?holdingFloating.value+Number(account.value.realized):null)
 const pnlClass=v=>Number(v)>0?'gain':Number(v)<0?'loss':''
 const fmtTime=v=>v?new Date(v).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'暂无'
 const initialized=computed(()=>!!account.value?.initialized_at)
 const liveEpisodes=computed(()=>episodes.value.filter(e=>['OPEN','UNKNOWN'].includes(e.status)))
+function applyMarketSnapshot(value){market.value=value;if(latestPriceEvent)applyPrice(latestPriceEvent)}
+function applyPrice(value){
+  if(!me.value||!value||typeof value!=='object')return
+  if(value.status_only){
+    const changedDay=market.value.curve_date&&value.curve_date&&market.value.curve_date!==value.curve_date
+    market.value={...market.value,...value,points:changedDay?[]:market.value.points}
+    if(latestPriceEvent)latestPriceEvent={...latestPriceEvent,...value,status_only:false}
+    if(changedDay&&tab.value==='home')void loader.run('market',{force:true})
+    return
+  }
+  if(value.unavailable){market.value={...market.value,fresh:false,message:value.message||'行情暂不可用'};return}
+  if(market.value.curve_date&&value.curve_date&&value.curve_date<market.value.curve_date)return
+  const old=market.value.quote, incoming=value.quote
+  if(old&&incoming&&Date.parse(incoming.source_at)<Date.parse(old.source_at))return
+  latestPriceEvent=value
+  const previousDate=market.value.curve_date, changedDay=previousDate&&value.curve_date&&previousDate!==value.curve_date
+  let points=changedDay?[]:[...(market.value.points||[])]
+  const point=value.latest_point
+  if(point&&(!previousDate||!value.curve_date||previousDate===value.curve_date)){
+    const at=Date.parse(point.at),last=points.at(-1),lastAt=last?Date.parse(last.at):null
+    if(Number.isFinite(at)){if(lastAt===at)points[points.length-1]=point;else if(lastAt===null||at>lastAt)points.push(point)}
+  }
+  market.value={...market.value,...value,points}
+  if(changedDay&&tab.value==='home')void loader.run('market',{force:true})
+}
 async function action(fn) { if(busy.value)return;busy.value=true;try{await fn()}catch(e){if(e!=='cancel'&&e!=='close'&&e.code!=='CANCELLED')showToast({message:e.message||'操作未完成，请重试',duration:4000})}finally{busy.value=false} }
 function refresh({force=false}={}) {
   if (!me.value) return
@@ -88,8 +119,8 @@ async function toggleUser(u){await action(async()=>{await api(`/admin/users/${u.
 async function budget(){await action(async()=>{Object.keys(form).forEach(k=>delete form[k]);form.budget=account.value.budget;popup.value='budget'})}
 async function saveBudget(){await action(async()=>{await api('/account/',{method:'PATCH',body:{budget:form.budget}});popup.value='';await refresh({force:true})})}
 async function changePage(p){entryPage.value=p;await loader.run('entries',{force:true})}
-function onVisible(){if(document.visibilityState==='visible'){if(me.value)refresh();else if(startupError.value&&!loading.value)void bootstrap();shellWorker?.check()}}
-function onOnline(){if(me.value)refresh();else if(!loading.value)void bootstrap()}
+function onVisible(){if(document.visibilityState==='visible'){if(me.value){refresh({force:true});quoteStream?.start()}else if(startupError.value&&!loading.value)void bootstrap();shellWorker?.check()}else quoteStream?.stop()}
+function onOnline(){if(me.value){refresh({force:true});quoteStream?.start()}else if(!loading.value)void bootstrap()}
 function applyUpdate(){if(!popup.value&&!busy.value)shellWorker?.activate()}
 const safeToUpdate=computed(()=>{
   const loginDirty=!me.value&&Object.values(credentials).some(Boolean)
@@ -98,9 +129,10 @@ const safeToUpdate=computed(()=>{
 })
 watch(safeToUpdate,ready=>{if(ready)applyUpdate()})
 watch(()=>[buyPreviewForm.price,buyPreviewForm.quantity,buyPreviewForm.fee,account.value?.cash,account.value?.shares,account.value?.cost_basis],()=>{previewRevision++;buyPreviewResult.value=null},{flush:'sync'})
-watch(tab,()=>refresh())
-onMounted(()=>{shellWorker=registerShellWorker(()=>{updateAvailable.value=true},undefined,undefined,()=>safeToUpdate.value);void bootstrap();timer=setInterval(()=>{if(document.visibilityState==='visible'){refresh();shellWorker?.check()}},30000);document.addEventListener('visibilitychange',onVisible);window.addEventListener('online',onOnline)})
-onBeforeUnmount(()=>{bootstrapVersion++;loader.reset();shellWorker?.dispose();clearInterval(timer);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('online',onOnline)})
+watch(tab,()=>refresh({force:true}))
+watch(me,user=>{if(!quoteStream)return;if(!user)quoteStream.stop();else if(document.visibilityState==='visible')quoteStream.start()})
+onMounted(()=>{shellWorker=registerShellWorker(()=>{updateAvailable.value=true},undefined,undefined,()=>safeToUpdate.value);quoteStream=createPriceStream({onPrice:applyPrice,onState:value=>{streamState.value=value},onFallback:()=>{void loader.run('quote',{force:true})},onOpen:()=>{if(tab.value==='home')void loader.run('market',{maxAgeMs:20000})}});void bootstrap();timer=setInterval(()=>{if(document.visibilityState==='visible')shellWorker?.check()},30000);document.addEventListener('visibilitychange',onVisible);window.addEventListener('online',onOnline)})
+onBeforeUnmount(()=>{bootstrapVersion++;quoteStream?.stop();loader.reset();shellWorker?.dispose();clearInterval(timer);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('online',onOnline)})
 </script>
 
 <template>
@@ -134,7 +166,7 @@ onBeforeUnmount(()=>{bootstrapVersion++;loader.reset();shellWorker?.dispose();cl
           <section class="card price-card"><SectionStatus :state="sectionState.market" label="行情" @retry="loader.run('market',{force:true})"/><div class="row"><span class="muted">华安黄金 ETF <small>518880</small></span><span class="tiny">{{market.quote?.source||'暂无来源'}}</span></div><div class="price-row"><strong class="price">{{price?Number(price).toFixed(3):'—'}}<small>元</small></strong><span v-if="market.change_percent!=null" class="change" :class="pnlClass(market.change_percent)">{{signed(market.change_percent)}}%</span></div><p class="tiny">源数据时间 {{fmtTime(market.quote?.source_at)}}</p>
             <details class="market-hours"><summary>交易与休市时间 <span>北京时间</span></summary><div class="market-hours-content"><p><strong>交易日：</strong>通常为周一至周五，周末及交易所公告休市日休市。</p><p><strong>交易时间：</strong>9:15–9:25 开盘集合竞价；9:30–11:30、13:00–15:00 交易。</p><p><strong>午间休市：</strong>11:30–13:00。</p><p><strong>本应用提醒：</strong>交易日的 9:30–11:30、13:00–15:00，且行情有效时检查；开盘集合竞价不监测。日历不保证覆盖临时停牌或临时休市，请以交易所公告为准。</p><a href="https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml" target="_blank" rel="noopener noreferrer">查看上交所交易规则 ↗</a></div></details>
             <div class="chart-caption"><strong>今日分时</strong><span>{{market.curve_date||'—'}} · 北京时间</span></div><PriceChart v-if="market.points.length" :points="market.points" /><div v-else class="chart-empty"><van-icon name="chart-trending-o" size="30"/><span>今日曲线还在等待数据</span><small>收到有效行情后显示，不补画缺失区间</small></div><p class="hint curve-note">午间休市已压缩。{{market.curve_note||'显示已取得的数据，缺口留空；采样不保证捕获每次瞬间到价。'}}</p>
-            <div v-if="!market.fresh" class="subtle-notice">{{market.message||'行情尚未就绪，到价提醒暂停。记账仍可使用。'}}</div>
+            <div v-if="streamState==='fallback'" class="subtle-notice">实时连接暂不可用，正在通过普通请求获取行情并尝试重连。</div><SectionStatus :state="sectionState.quote" label="行情连接" @retry="loader.run('quote',{force:true})"/><div v-if="!market.fresh" class="subtle-notice">{{market.message||'行情尚未就绪，到价提醒暂停。记账仍可使用。'}}</div>
           </section>
           <SectionStatus :state="sectionState.episodes" label="提醒" @retry="loader.run('episodes',{force:true})"/><section v-if="liveEpisodes.length" class="alert-stack"><article v-for="e in liveEpisodes" :key="e.id" class="card alert-card"><div class="row"><strong>{{e.side==='BUY'?'买入':'卖出'}}条件已达到</strong><span class="status-pill">{{e.status==='UNKNOWN'?'推送结果未确认':'待处理'}}</span></div><p>{{e.context.reason}} · 参考价 {{e.context.price}}</p><div class="button-row"><van-button size="small" type="primary" round :disabled="!resolveEpisodePlan(e,plans)" @click="openEpisode(e)">确认实际成交</van-button><van-button size="small" plain round @click="ignore(e)">暂不操作</van-button></div></article></section>
 
@@ -142,7 +174,7 @@ onBeforeUnmount(()=>{bootstrapVersion++;loader.reset();shellWorker?.dispose();cl
           <p class="version-info" aria-label="当前版本">前端 {{frontendVersion==='开发模式'?frontendVersion:formatRelease(frontendVersion)}} · 后端 {{formatRelease(market.backend_version)}}<span v-if="sectionState.market.error">（上次获取）</span></p>
         </template>
         <template v-if="tab==='holdings' && initialized"><div class="page-heading"><div><p class="eyebrow">你的黄金账本</p><h1>我的持仓</h1></div><van-button size="small" round plain @click="openBuyPreview">买入预览</van-button></div>
-          <section class="card account-card"><SectionStatus :state="sectionState.account" label="账户" @retry="loader.run('account',{force:true})"/><div class="row"><h2>持仓概览</h2><span class="tiny">截至当前记录</span></div><div class="holding-main"><div><span class="muted">持有份额</span><strong>{{account.shares.toLocaleString()}}<small>份</small></strong></div><div><span class="muted">每份成本</span><strong>{{account.unit_cost==null?'—':Number(account.unit_cost).toFixed(4)}}<small>元</small></strong></div></div><div class="metrics"><div><span>可用现金</span><strong>¥{{money(account.cash)}}</strong></div><div><span>持仓市值</span><strong>¥{{money(account.market_value)}}</strong></div><div><span>当前浮盈亏</span><strong :class="pnlClass(account.floating)">{{signed(account.floating)}}</strong></div><div><span>已记录累计净收益</span><strong :class="pnlClass(account.total_profit)">{{signed(account.total_profit)}}</strong></div></div><p class="hint">浮盈亏未扣未来卖出费用。收益自 {{fmtTime(account.initialized_at)}} 期初录入起算，不包含未录入的历史已卖出收益。行情过期时资产为最后行情估值。</p></section>
+          <section class="card account-card"><SectionStatus :state="sectionState.account" label="账户" @retry="loader.run('account',{force:true})"/><div class="row"><h2>持仓概览</h2><span class="tiny">截至当前记录</span></div><div class="holding-main"><div><span class="muted">持有份额</span><strong>{{account.shares.toLocaleString()}}<small>份</small></strong></div><div><span class="muted">每份成本</span><strong>{{account.unit_cost==null?'—':Number(account.unit_cost).toFixed(4)}}<small>元</small></strong></div></div><div class="metrics"><div><span>可用现金</span><strong>¥{{money(account.cash)}}</strong></div><div><span>持仓市值</span><strong>¥{{money(holdingValue)}}</strong></div><div><span>当前浮盈亏</span><strong  :class="pnlClass(holdingFloating)">{{signed(holdingFloating)}}</strong></div><div><span>已记录累计净收益</span><strong :class="pnlClass(holdingTotal)">{{signed(holdingTotal)}}</strong></div></div><p class="hint">浮盈亏未扣未来卖出费用。收益自 {{fmtTime(account.initialized_at)}} 期初录入起算，不包含未录入的历史已卖出收益。行情过期时资产为最后行情估值。</p></section>
         </template>
         <template v-if="tab==='plans' && initialized"><SectionStatus :state="sectionState.plans" label="计划" @retry="loader.run('plans',{force:true})"/><SectionStatus :state="sectionState.account" label="账户" @retry="loader.run('account',{force:true})"/><div class="page-heading"><div><p class="eyebrow">把想法写下来</p><h1>购买计划</h1></div></div><section class="card budget-card"><div><span class="muted">计划预算</span><strong>¥{{money(account.budget)}}</strong></div><button class="text-button" @click="budget">修改</button><p class="hint">现金 ¥{{money(account.cash)}} · 当前成本占用 ¥{{money(account.cost_basis)}}<br>预算剩余额度按预算减持仓成本估算，不代表现金。</p></section>
           <section v-for="side in ['BUY','SELL']" :key="side" class="card plan-card"><div class="row"><h2>{{side==='BUY'?'下一笔买入':'下一笔卖出'}}</h2><span class="side-badge" :class="side==='SELL'?'sell':''">{{side==='BUY'?'买':'卖'}}</span></div><template v-if="activePlans.find(p=>p.side===side)"><template v-for="p in activePlans.filter(p=>p.side===side)" :key="p.id"><div class="plan-target"><small>{{side==='BUY'?(p.direction==='BELOW'?'价格跌到或低于':'价格涨到或高于'):'目标价 / 本笔目标净收益率'}}</small><strong>{{p.target_price?`¥${p.target_price}`:'—'}}<span v-if="side==='SELL'&&p.target_profit!=null"> / {{p.target_profit}}%</span></strong></div><p class="muted">{{side==='BUY'?`含费金额上限 ¥${money(p.amount)}`:p.sell_all?'全部持仓':`${p.quantity} 份`}}</p><p class="hint">{{p.evaluation?.reason}}<template v-if="p.evaluation?.quantity"> · 参考 {{p.evaluation.quantity}} 份</template></p><div class="button-row"><van-button size="small" round type="primary" @click="openTrade(side,p)">已实际成交</van-button><van-button size="small" round plain @click="openPlan(side,p)">编辑</van-button><button class="text-button muted" @click="cancelPlan(p)">取消计划</button></div></template></template><template v-else-if="!sectionState.plans.pending && !sectionState.plans.error"><p class="empty-text">{{side==='BUY'?'安排下一笔，按自己的节奏积累。':'设置你愿意卖出的价格或净收益。'}}</p><van-button round block plain @click="openPlan(side)">＋ {{side==='BUY'?'添加买入计划':'添加卖出计划'}}</van-button></template><p class="hint">{{side==='BUY'?'计划跨天保留；不会自动下单。':'目标价与净收益率任一满足，且预计扣费后不亏损，才提醒。'}}</p></section>

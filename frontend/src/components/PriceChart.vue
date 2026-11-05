@@ -1,13 +1,14 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { tradingChartData } from '../price-chart'
+import { tradingChartData, chartExtremes } from '../price-chart'
 echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
 const props = defineProps({ points: { type: Array, default: () => [] } })
 const el = ref(null)
+const extremes = computed(() => chartExtremes(props.points))
 let chart, observer
 function render() {
   if (!chart) return
@@ -18,4 +19,16 @@ onMounted(() => { chart = echarts.init(el.value); observer = new ResizeObserver(
 watch(() => props.points, render, { deep: true })
 onBeforeUnmount(() => { observer?.disconnect(); chart?.dispose() })
 </script>
-<template><div ref="el" class="chart" role="img" :aria-label="`今日价格曲线，已取得 ${points.length} 个数据点`"></div></template>
+<template>
+  <div class="chart-extremes" aria-label="已采集曲线最高价和最低价">
+    <span>最高 <strong>{{ extremes.high == null ? '—' : extremes.high.toFixed(3) }}</strong></span>
+    <span>最低 <strong>{{ extremes.low == null ? '—' : extremes.low.toFixed(3) }}</strong></span>
+    <span class="chart-extremes-note">已采集数据</span>
+  </div>
+  <div ref="el" class="chart" role="img" :aria-label="`今日价格曲线，已取得 ${points.length} 个数据点`"></div>
+</template>
+<style scoped>
+.chart-extremes{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 18px;color:#7c817a;font-size:12px}
+.chart-extremes strong{font-size:14px;font-weight:600;color:#454b43;font-variant-numeric:tabular-nums}
+.chart-extremes-note{margin-left:auto;color:#96998f}
+</style>
