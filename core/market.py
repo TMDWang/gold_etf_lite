@@ -7,6 +7,7 @@ import requests
 from django.utils import timezone
 from django.conf import settings
 from core.models import Quote, Minute, SystemState
+from core.version import backend_version
 
 CN=ZoneInfo('Asia/Shanghai')
 HEADERS={'User-Agent':'Mozilla/5.0','Referer':'https://finance.sina.com.cn/'}
@@ -136,4 +137,4 @@ def market_data():
     message=state.get('message','等待首次采集；行情未就绪时到价提醒暂停')
     if not calendar_valid:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
     if settings.PAUSE_NOTIFICATIONS:message='维护模式：自动提醒已暂停，可核对账目及计划'
-    return {'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at,'fetched_at':q.fetched_at} if q else None,'fresh':fresh and calendar_valid and not settings.PAUSE_NOTIFICATIONS,'session_open':is_trading(now),'message':message,'calendar_until':calendar_until,'notifications_paused':settings.PAUSE_NOTIFICATIONS,'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,'curve_date':str(today),'points':[{'at':m.at,'price':str(m.price)} for m in points],'curve_note':'含采集时点数据；缺失区间留空，不是完整分钟历史。' if sampled else '显示今天已取得的分钟数据；缺失区间留空。'}
+    return {'backend_version':backend_version(),'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at,'fetched_at':q.fetched_at} if q else None,'fresh':fresh and calendar_valid and not settings.PAUSE_NOTIFICATIONS,'session_open':is_trading(now),'message':message,'calendar_until':calendar_until,'notifications_paused':settings.PAUSE_NOTIFICATIONS,'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,'curve_date':str(today),'points':[{'at':m.at,'price':str(m.price)} for m in points],'curve_note':'含采集时点数据；缺失区间留空，不是完整分钟历史。' if sampled else '显示今天已取得的分钟数据；缺失区间留空。'}
