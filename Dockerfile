@@ -7,6 +7,7 @@ COPY frontend/ ./
 RUN pnpm build
 
 FROM python:3.12-slim-bookworm
+ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TZ=Asia/Shanghai
 WORKDIR /app
 # PostgreSQL 17 tools must match the database for consistent custom-format dumps.
@@ -17,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     apt-get update && apt-get install -y --no-install-recommends postgresql-client-17 && \
     rm -rf /var/lib/apt/lists/*
 COPY requirements.lock ./
-RUN pip install --no-cache-dir -r requirements.lock
+RUN pip install --no-cache-dir --index-url "$PYPI_INDEX_URL" -r requirements.lock
 COPY . .
 COPY --from=frontend /build/dist ./frontend/dist
 RUN SECRET_KEY=build-only DEBUG=1 python manage.py collectstatic --noinput && \

@@ -51,6 +51,8 @@ docker compose ps
 
 首次构建会下载公开依赖和镜像，需要 NAS 能访问 Docker Hub、npm、PyPI 及 PostgreSQL 软件源。无需 GitHub Actions。镜像未预先编译；NAS 首次构建可能需要数分钟。
 
+Python 依赖构建默认使用清华 PyPI 镜像（HTTPS），保持 `requirements.lock` 中的固定版本。此设置只影响构建时的 Python 包下载，不影响 npm、Docker 镜像或其他软件源。若需临时使用 PyPI 官方源，可运行 `docker compose build --build-arg PYPI_INDEX_URL=https://pypi.org/simple`，再执行 `docker compose up -d`。请勿在构建参数中填写密码或令牌。
+
 5. 创建首个应用管理员（把 `owner` 换成你的用户名，密码按提示输入，不写在命令中）：
 
 ```sh
