@@ -45,7 +45,7 @@ def evaluate_all(now=None):
             account=Account.objects.select_for_update().filter(user=user).first()
             p=Plan.objects.select_for_update().get(pk=plan_id)
             if p.status!='ACTIVE' or not account:continue
-            result=evaluate(p,account,quote.price,user)
+            result=evaluate(p,account,quote.price,user,quote=quote)
             if result['eligible']:
                 if not p.condition_met:
                     p.episode_counter+=1;p.condition_met=True;p.save(update_fields=['episode_counter','condition_met'])

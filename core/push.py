@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal as D
 import hashlib
 import requests
 from cryptography.fernet import Fernet, InvalidToken
@@ -80,11 +81,12 @@ def deliver_due(now=None):
             raw=Episode.objects.get(pk=ep_id)
             p=Plan.objects.select_for_update().get(pk=raw.plan_id)
             e=Episode.objects.select_for_update().get(pk=ep_id)
-            if p.status!='ACTIVE' or p.version!=e.version or e.status!='OPEN' or e.next_at>now or e.sent_count>=u.reminder_max:continue
+            maximum=p.alert_repeat_max if p.side=='INFO' else u.reminder_max
+            if p.status!='ACTIVE' or p.version!=e.version or e.status!='OPEN' or e.next_at>now or e.sent_count>=maximum:continue
             from core.monitor import usable_quote
             quote=usable_quote(now)
             if not quote or not account:continue
-            context=evaluate(p,account,quote.price,u)
+            context=evaluate(p,account,quote.price,u,quote=quote)
             if not context['eligible']:
                 e.status='CLOSED';e.save(update_fields=['status']);continue
             # Finite, explicit-rejection retry budget separate from business repetition.
@@ -104,7 +106,7 @@ def deliver_due(now=None):
             from core.monitor import usable_quote
             send_now=timezone.now()
             quote=usable_quote(send_now)
-            context=evaluate(p,account,quote.price if quote else None,u)
+            context=evaluate(p,account,quote.price if quote else None,u,quote=quote)
             if not u.is_active or not u.token_encrypted or p.version!=e.version or p.status!='ACTIVE' or e.status!='OPEN' or not quote or not context['eligible']:
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='行情、计划或账号状态已变化')
                 continue
@@ -112,15 +114,21 @@ def deliver_due(now=None):
             except BusinessError:
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='发送前限额或密钥检查未通过')
                 continue
-            title='金笺 · 518880 '+('买入' if p.side=='BUY' else '卖出')+'条件达到'
-            content=f"事件 #{e.pk} / 计划版本 {e.version}\n参考价 {quote.price} 元（源时间 {quote.source_at.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Shanghai')).isoformat()}）\n{context['reason']}\n参考份额 {context['quantity']} 份。请到券商自行核对及交易，再回金笺记录实际成交。\n{settings.PUBLIC_URL}"
+            if p.side=='INFO':
+                title='金笺 · 518880 行情提醒'
+                basis={'PRICE':'价格','PCT_CLOSE':'相对昨收涨跌幅','PCT_COST':'相对持仓成本涨跌幅'}.get(p.alert_kind,'行情')
+                unit='元' if p.alert_kind=='PRICE' else '%'
+                content=f"事件 #{e.pk} / {p.alert_label or '行情提醒'}\n参考价 {quote.price} 元（源时间 {quote.source_at.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Shanghai')).isoformat()}）\n{basis} {'达到或高于' if p.direction=='ABOVE' else '达到或低于'} {p.alert_threshold}{unit}；当前 {D(context['value']).quantize(D('0.0001'))}{unit}\n仅供观察行情，不构成买卖建议。\n{settings.PUBLIC_URL}"
+            else:
+                title='金笺 · 518880 '+('买入' if p.side=='BUY' else '卖出')+'条件达到'
+                content=f"事件 #{e.pk} / 计划版本 {e.version}\n参考价 {quote.price} 元（源时间 {quote.source_at.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Shanghai')).isoformat()}）\n{context['reason']}\n参考份额 {context['quantity']} 份。请到券商自行核对及交易，再回金笺记录实际成交。\n{settings.PUBLIC_URL}"
             if not reserve_content(d,token,content,send_now):
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='同内容发送已到本小时上限')
                 e.next_at=now+timedelta(hours=1);e.save(update_fields=['next_at']);continue
             status,detail=send_http(token,title,content)
             Delivery.objects.filter(pk=d.pk).update(status=status,detail=detail)
             if status=='SENT':
-                e.sent_count+=1;e.next_at=send_now+timedelta(minutes=u.reminder_minutes)
+                e.sent_count+=1;e.next_at=send_now+timedelta(minutes=p.alert_interval if p.side=='INFO' else u.reminder_minutes)
             elif status=='UNKNOWN':
                 e.status='UNKNOWN'
             else:

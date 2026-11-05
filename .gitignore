@@ -10,4 +10,5 @@ staticfiles/
 data/
 backups/
 .pytest_cache/
+.update-tests/
 *.log

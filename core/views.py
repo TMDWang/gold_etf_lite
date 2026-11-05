@@ -8,7 +8,7 @@ from rest_framework import serializers as s
 from core.models import User, Account, Entry, Plan, Episode, Delivery, Quote, Minute, SystemState, Audit
 from core.common import BusinessError
 from core.ledger import get_account, initialize, post_entry, require_initialized, effective_payloads
-from core.serializers import PlanSerializer, SettingsSerializer
+from core.serializers import PlanSerializer, SettingsSerializer, AlertSerializer
 from core.plans import evaluate
 from core.auth_views import AppAdmin
 
@@ -73,7 +73,7 @@ class CorrectView(APIView):
 class PlansView(APIView):
     def get(self,request):
         a=get_account(request.user)
-        return Response([plan_data(p,a,request.user) for p in Plan.objects.filter(user=request.user).order_by('-id')[:100]])
+        return Response([plan_data(p,a,request.user) for p in Plan.objects.filter(user=request.user,side__in=['BUY','SELL']).order_by('-id')[:100]])
     def post(self,request):
         serializer=PlanSerializer(data=request.data);serializer.is_valid(raise_exception=True)
         d=serializer.validated_data
@@ -90,7 +90,7 @@ class PlanDetailView(APIView):
     def patch(self,request,pk):
         with transaction.atomic():
             User.objects.select_for_update().get(pk=request.user.pk)
-            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,status='ACTIVE')
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,status='ACTIVE',side__in=['BUY','SELL'])
             raw={k:getattr(p,k) for k in PlanSerializer().fields}
             raw.update(request.data)
             if raw.get('side')!=p.side: raise BusinessError('不能改变计划方向，请取消后新建')
@@ -105,7 +105,7 @@ class CancelPlanView(APIView):
     def post(self,request,pk):
         with transaction.atomic():
             User.objects.select_for_update().get(pk=request.user.pk)
-            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk)
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side__in=['BUY','SELL'])
             if p.status=='ACTIVE':
                 p.status='CANCELLED';p.save(update_fields=['status','updated_at'])
                 Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
@@ -113,7 +113,55 @@ class CancelPlanView(APIView):
 
 class EpisodesView(APIView):
     def get(self,request):
-        return Response([{'id':e.pk,'plan':e.plan_id,'version':e.version,'side':e.plan.side,'status':e.status,'context':e.context,'sent_count':e.sent_count,'created_at':e.created_at} for e in Episode.objects.filter(plan__user=request.user).select_related('plan').order_by('-id')[:30]])
+        return Response([{'id':e.pk,'plan':e.plan_id,'version':e.version,'side':e.plan.side,'status':e.status,'context':e.context,'sent_count':e.sent_count,'created_at':e.created_at} for e in Episode.objects.filter(plan__user=request.user,plan__side__in=['BUY','SELL']).select_related('plan').order_by('-id')[:30]])
+
+def alert_data(p):
+    episode=Episode.objects.filter(plan=p,version=p.version).order_by('-id').first()
+    return {'id':p.pk,'kind':p.alert_kind,'direction':p.direction,'threshold':str(p.alert_threshold),'interval':p.alert_interval,'repeat_max':p.alert_repeat_max,'label':p.alert_label,'enabled':p.status=='ACTIVE','version':p.version,'episode':{'id':episode.pk,'status':episode.status,'context':episode.context,'sent_count':episode.sent_count} if episode else None}
+
+def alert_values(p):
+    return {'kind':p.alert_kind,'direction':p.direction,'threshold':p.alert_threshold,'interval':p.alert_interval,'repeat_max':p.alert_repeat_max,'label':p.alert_label}
+
+def set_alert_values(p,d):
+    p.alert_kind=d['kind'];p.direction=d['direction'];p.alert_threshold=d['threshold'];p.alert_interval=d['interval'];p.alert_repeat_max=d['repeat_max'];p.alert_label=d['label']
+
+class AlertsView(APIView):
+    def get(self,request):
+        return Response([alert_data(p) for p in Plan.objects.filter(user=request.user,side='INFO',status__in=['ACTIVE','PAUSED']).order_by('-id')])
+    def post(self,request):
+        serializer=AlertSerializer(data=request.data);serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            if Plan.objects.filter(user=request.user,side='INFO',status__in=['ACTIVE','PAUSED']).count()>=100:raise BusinessError('最多设置 100 条行情提醒')
+            p=Plan(user=request.user,side='INFO');set_alert_values(p,serializer.validated_data);p.save()
+        return Response(alert_data(p),status=201)
+
+class AlertDetailView(APIView):
+    def patch(self,request,pk):
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',status__in=['ACTIVE','PAUSED'])
+            raw=alert_values(p);raw.update({k:v for k,v in request.data.items() if k!='enabled'})
+            serializer=AlertSerializer(data=raw);serializer.is_valid(raise_exception=True)
+            enabled=s.BooleanField().run_validation(request.data.get('enabled',p.status=='ACTIVE'))
+            set_alert_values(p,serializer.validated_data);p.status='ACTIVE' if enabled else 'PAUSED';p.version+=1;p.condition_met=False;p.save()
+            Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+        return Response(alert_data(p))
+    def delete(self,request,pk):
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',status__in=['ACTIVE','PAUSED'])
+            p.status='CANCELLED';p.version+=1;p.condition_met=False;p.save()
+            Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+        return Response({'detail':'提醒已删除'})
+
+class AlertIgnoreView(APIView):
+    def post(self,request,pk):
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',status='ACTIVE')
+            Episode.objects.filter(plan=p,version=p.version,status__in=['OPEN','UNKNOWN']).update(status='IGNORED')
+        return Response({'detail':'本轮提醒已停止'})
 
 class IgnoreView(APIView):
     def post(self,request,pk):

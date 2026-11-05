@@ -7,8 +7,22 @@ def estimated_fee(user,gross):
     # Conservative round up for predictions; actual accounting uses the user's real fee.
     return (max(D(user.fee_minimum),gross*D(user.fee_rate))+D(user.fee_extra)).quantize(D('0.01'),rounding=ROUND_CEILING)
 
-def evaluate(plan,account,price,user):
+def evaluate(plan,account,price,user,quote=None):
     result={'eligible':False,'reason':'等待有效行情','quantity':0,'price':str(price) if price else None,'net':None}
+    if plan.side=='INFO':
+        if not price:return result
+        price=D(price)
+        if plan.alert_kind=='PRICE': value=price
+        else:
+            if plan.alert_kind=='PCT_CLOSE': basis=quote.previous_close if quote else None
+            else: basis=account.cost_basis/D(account.shares) if account.initialized_at and account.shares and account.cost_basis>0 else None
+            if not basis or basis<=0:
+                result['reason']='缺少有效昨收价或持仓成本，暂不提醒';return result
+            value=(price/D(basis)-1)*100
+        result['value']=str(value)
+        result['eligible']=value>=plan.alert_threshold if plan.direction=='ABOVE' else value<=plan.alert_threshold
+        result['reason']='行情条件已达到' if result['eligible'] else '尚未达到行情条件'
+        return result
     if not price or not account.initialized_at:
         result['reason']='请先初始化账本' if not account.initialized_at else '等待有效行情'
         return result

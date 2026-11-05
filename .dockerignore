@@ -9,5 +9,6 @@ frontend/dist
 staticfiles
 data
 backups
+.update-tests
 *.zip
 *.log

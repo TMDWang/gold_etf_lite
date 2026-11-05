@@ -69,3 +69,16 @@ class SettingsSerializer(s.Serializer):
     reminder_minutes = s.IntegerField(min_value=20, max_value=1440, required=False)
     reminder_max = s.IntegerField(min_value=1, max_value=10, required=False)
     push_token = s.RegexField(r'^[a-zA-Z0-9]{20,100}$', required=False, allow_blank=True, write_only=True)
+
+class AlertSerializer(s.Serializer):
+    kind=s.ChoiceField(choices=['PRICE','PCT_CLOSE','PCT_COST'])
+    direction=s.ChoiceField(choices=['BELOW','ABOVE'])
+    threshold=s.DecimalField(max_digits=12,decimal_places=4,min_value=D('-100'),max_value=D('10000'))
+    interval=s.IntegerField(min_value=20,max_value=1440)
+    repeat_max=s.IntegerField(min_value=1,max_value=10)
+    label=s.CharField(max_length=80,allow_blank=True,required=False,default='')
+
+    def validate(self,d):
+        if d['kind']=='PRICE' and (d['threshold']<=0 or d['threshold']>1000 or d['threshold']!=d['threshold'].quantize(D('0.001'))):
+            raise s.ValidationError('价格须大于 0 且不超过 1000，最多三位小数')
+        return d

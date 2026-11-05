@@ -34,7 +34,12 @@ class Account(models.Model):
 
 class Plan(models.Model):
     user = models.ForeignKey(User, on_delete=models.PROTECT)
-    side = models.CharField(max_length=4, choices=[('BUY', '买入'), ('SELL', '卖出')])
+    side = models.CharField(max_length=4, choices=[('BUY', '买入'), ('SELL', '卖出'), ('INFO', '行情提醒')])
+    alert_kind = models.CharField(max_length=10, blank=True)
+    alert_threshold = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    alert_label = models.CharField(max_length=80, blank=True)
+    alert_interval = models.PositiveIntegerField(default=30)
+    alert_repeat_max = models.PositiveSmallIntegerField(default=3)
     direction = models.CharField(max_length=5, default='BELOW')
     target_price = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
     target_profit = models.DecimalField(max_digits=9, decimal_places=4, null=True, blank=True)
@@ -49,7 +54,7 @@ class Plan(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=['user', 'side'], condition=models.Q(status='ACTIVE'), name='one_active_plan_per_side')]
+        constraints = [models.UniqueConstraint(fields=['user', 'side'], condition=models.Q(status='ACTIVE', side__in=['BUY', 'SELL']), name='one_active_plan_per_side')]
         indexes = [models.Index(fields=['user', 'status'])]
 
 
