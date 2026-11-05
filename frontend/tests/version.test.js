@@ -1,10 +1,11 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {fingerprintEntries} from '../scripts/version.js'
+import {packageVersion} from '../scripts/version.js'
 
-test('frontend fingerprint is stable across traversal order and changes with content',()=>{
-  const items=[['src/a.js',Buffer.from('one')],['public/icon.svg',Buffer.from('two')]]
-  assert.match(fingerprintEntries(items),/^[0-9a-f]{10}$/)
-  assert.equal(fingerprintEntries(items),fingerprintEntries([...items].reverse()))
-  assert.notEqual(fingerprintEntries(items),fingerprintEntries([['src/a.js',Buffer.from('changed')],items[1]]))
+test('frontend version comes from package metadata in semantic version form',()=>{
+  assert.equal(packageVersion({version:'0.2.0'}),'0.2.0')
+  assert.equal(packageVersion({version:'1.0.0-rc.1+build.5'}),'1.0.0-rc.1+build.5')
+  assert.throws(()=>packageVersion({version:'hash123'}))
+  assert.throws(()=>packageVersion({version:'01.2.3'}))
+  assert.throws(()=>packageVersion({version:'1.0.0-01'}))
 })

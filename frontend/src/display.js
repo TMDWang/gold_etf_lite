@@ -1,3 +1,5 @@
+import {isSemver} from './semver.js'
+export const formatRelease = value => value == null || value === '' ? '未获取' : isSemver(value) ? `v${value}` : '旧版'
 export const money = value => value === null || value === undefined || value === '' ? '—' : Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 export const signed = value => value === null || value === undefined ? '—' : `${Number(value) > 0 ? '+' : ''}${money(value)}`
 export function beijingInput(value) {

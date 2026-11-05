@@ -1,30 +1,13 @@
-import {createHash} from 'node:crypto'
-import {readdirSync,readFileSync,existsSync} from 'node:fs'
-import {resolve,relative,sep} from 'node:path'
+import {readFileSync} from 'node:fs'
+import {resolve} from 'node:path'
+import {isSemver} from '../src/semver.js'
 
-export function fingerprintEntries(entries) {
-  const hash=createHash('sha256')
-  for (const [name,content] of [...entries].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)) {
-    const nameBytes=Buffer.from(name), length=Buffer.alloc(8)
-    length.writeBigUInt64BE(BigInt(nameBytes.length));hash.update(length);hash.update(nameBytes)
-    const size=Buffer.alloc(8);size.writeBigUInt64BE(BigInt(content.length));hash.update(size);hash.update(content)
-  }
-  return hash.digest('hex').slice(0,10)
+export function packageVersion(metadata) {
+  const version=metadata?.version
+  if(!isSemver(version))throw new Error('前端版本必须符合语义化版本规范')
+  return version
 }
 
 export function frontendVersion(root) {
-  const entries=[]
-  function walk(path) {
-    if(!existsSync(path))return
-    for(const item of readdirSync(path,{withFileTypes:true})) {
-      const full=resolve(path,item.name)
-      if(item.isDirectory())walk(full)
-      else if(item.isFile())entries.push([relative(root,full).split(sep).join('/'),readFileSync(full)])
-    }
-  }
-  for(const dir of ['src','public','scripts'])walk(resolve(root,dir))
-  for(const name of ['package.json','pnpm-lock.yaml','pnpm-workspace.yaml','vite.config.js']) {
-    const path=resolve(root,name);if(existsSync(path))entries.push([name,readFileSync(path)])
-  }
-  return fingerprintEntries(entries)
+  return packageVersion(JSON.parse(readFileSync(resolve(root,'package.json'),'utf8')))
 }

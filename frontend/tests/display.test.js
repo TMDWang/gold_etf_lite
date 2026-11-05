@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { money, signed, tradePreview, beijingInput, backupSummary } from '../src/display.js'
+import { money, signed, tradePreview, beijingInput, backupSummary, formatRelease } from '../src/display.js'
 test('missing prices are not displayed as zero profit', () => {
   assert.equal(money(null), '—')
   assert.equal(signed('0.00'), '0.00')
@@ -18,4 +18,10 @@ test('backup failure remains visible even after a prior success', () => {
   assert.match(status,/失败/)
   assert.match(status,/2026-10-21/)
   assert.match(status,/2026-10-20/)
+})
+test('release labels do not expose legacy code fingerprints',()=>{
+  assert.equal(formatRelease('0.2.0'),'v0.2.0')
+  assert.equal(formatRelease('1.0.0-rc.1'),'v1.0.0-rc.1')
+  assert.equal(formatRelease('fefbad1234'),'旧版')
+  assert.equal(formatRelease(null),'未获取')
 })
