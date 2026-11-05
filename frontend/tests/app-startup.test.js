@@ -5,7 +5,7 @@ import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
 import {createSectionLoader,createSessionRequests,resolveEpisodePlan} from '../src/loading.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,popup,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,setWorker(w){shellWorker=w}}`)(deps)}
+function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,popup,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
@@ -35,4 +35,15 @@ test('new version does not interrupt login or first account setup',async()=>{
  await nextTick();assert.equal(count,0)
  s.me.value={id:1};s.account.value={initialized_at:null};s.init.budget='500';await nextTick();assert.equal(count,0)
  s.init.budget='';await nextTick();assert.equal(count,1)
+})
+test('an old buy preview response is discarded after the inputs change',async()=>{
+ const pending=deferred();const s=app(async()=>[],async()=>pending.promise)
+ s.me.value={id:1};s.account.value={initialized_at:'now',shares:100,cash:'500',cost_basis:'400'}
+ s.openBuyPreview();s.buyPreviewForm.price='4';const task=s.calculateBuyPreview();s.buyPreviewForm.price='5'
+ pending.resolve({after:{shares:200}});await task
+ assert.equal(s.buyPreviewResult.value,null)
+})
+test('reset clears any personal buy preview',()=>{
+ const s=app(async()=>[]);s.buyPreviewForm.price='4';s.buyPreviewResult.value={after:{cash:'10'}}
+ s.resetPrivate();assert.equal(s.buyPreviewForm.price,'');assert.equal(s.buyPreviewResult.value,null)
 })

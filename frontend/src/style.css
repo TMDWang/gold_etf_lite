@@ -22,3 +22,10 @@
 .market-hours-content{padding:0 12px 10px}
 .market-hours-content p{margin:6px 0;overflow-wrap:anywhere}
 .market-hours-content a{color:#86621f;text-decoration:underline;text-underline-offset:2px}
+
+.buy-preview-result{overflow-x:auto;color:#554b37}
+.buy-preview-result .row{flex-wrap:wrap;gap:6px}
+.buy-preview-result table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;font-variant-numeric:tabular-nums}
+.buy-preview-result th,.buy-preview-result td{padding:7px 4px;text-align:right;white-space:nowrap;border-bottom:1px solid #e9e1d0}
+.buy-preview-result th:first-child{text-align:left;font-weight:500}
+.buy-preview-result .danger{margin-top:10px}
