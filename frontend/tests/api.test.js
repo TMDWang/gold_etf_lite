@@ -20,3 +20,30 @@ test('offline failure is readable and caller cancellation remains distinct',asyn
   const c=new AbortController();c.abort()
   await assert.rejects(api('/account/',{signal:c.signal}),e=>e.code==='CANCELLED')
 })
+test('read requests recover from a brief network failure or gateway error',async()=>{
+  let attempts=0
+  const api=createApiClient({retryDelay:0,fetchImpl:async()=>{attempts++;if(attempts===1)throw new TypeError('Failed to fetch');return{ok:true,json:async()=>({ok:true})}}})
+  assert.deepEqual(await api('/market/'),{ok:true});assert.equal(attempts,2)
+  attempts=0
+  const gateway=createApiClient({retryDelay:0,fetchImpl:async()=>++attempts===1?{ok:false,status:502}:{ok:true,json:async()=>({ok:true})}})
+  assert.deepEqual(await gateway('/account/'),{ok:true});assert.equal(attempts,2)
+})
+test('writes are not retried on network or gateway failure',async()=>{
+  let attempts=0
+  const api=createApiClient({retryDelay:0,fetchImpl:async()=>{attempts++;throw new TypeError('Failed to fetch')}})
+  await assert.rejects(api('/entries/',{method:'POST',body:{}}),/可能已保存/);assert.equal(attempts,1)
+  attempts=0
+  const gateway=createApiClient({retryDelay:0,fetchImpl:async()=>{attempts++;return{ok:false,status:502,json:async()=>{throw new SyntaxError('HTML')}}}})
+  await assert.rejects(gateway('/cash/',{method:'POST',body:{}}),/可能已保存/);assert.equal(attempts,1)
+})
+test('caller cancellation during retry delay does not issue a second request',async()=>{
+  let attempts=0;const c=new AbortController()
+  const api=createApiClient({retryDelay:1000,fetchImpl:async()=>{attempts++;return{ok:false,status:502}}})
+  const pending=api('/market/',{signal:c.signal});await Promise.resolve();c.abort()
+  await assert.rejects(pending,e=>e.code==='CANCELLED');assert.equal(attempts,1)
+})
+test('mixed network and gateway errors never cause more than one retry',async()=>{
+  let attempts=0
+  const api=createApiClient({retryDelay:0,fetchImpl:async()=>{attempts++;if(attempts===1)throw new TypeError('network');return{ok:false,status:502,json:async()=>{throw new SyntaxError('HTML')}}}})
+  await assert.rejects(api('/market/'),/服务暂时不可用/);assert.equal(attempts,2)
+})

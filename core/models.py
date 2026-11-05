@@ -40,6 +40,9 @@ class PublicAlert(models.Model):
     repeat_max = models.PositiveSmallIntegerField(default=3)
     label = models.CharField(max_length=80, blank=True)
     active = models.BooleanField(default=True)
+    version = models.PositiveIntegerField(default=1)
+    condition_met = models.BooleanField(default=False)
+    episode_counter = models.PositiveIntegerField(default=0)
 
 
 class Plan(models.Model):
@@ -99,9 +102,24 @@ class Episode(models.Model):
         constraints = [models.UniqueConstraint(fields=['plan', 'version', 'number'], name='unique_plan_episode')]
 
 
+class GroupEpisode(models.Model):
+    plan_rule = models.ForeignKey(PublicAlert, on_delete=models.PROTECT)
+    version = models.PositiveIntegerField()
+    number = models.PositiveIntegerField()
+    status = models.CharField(max_length=12, default='OPEN')
+    sent_count = models.PositiveSmallIntegerField(default=0)
+    next_at = models.DateTimeField()
+    context = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['plan_rule','version','number'], name='unique_group_episode')]
+
+
 class Delivery(models.Model):
     user = models.ForeignKey(User, on_delete=models.PROTECT)
     episode = models.ForeignKey(Episode, on_delete=models.PROTECT, null=True, blank=True)
+    group_episode = models.ForeignKey(GroupEpisode, on_delete=models.PROTECT, null=True, blank=True)
     status = models.CharField(max_length=12, default='SENDING')
     detail = models.CharField(max_length=200, blank=True)
     token_hash = models.CharField(max_length=64, blank=True, db_index=True)

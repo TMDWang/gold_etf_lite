@@ -4,7 +4,7 @@ from datetime import timedelta
 from django.db import connection, close_old_connections, transaction
 from django.conf import settings
 from django.utils import timezone
-from core.models import User, Account, Plan, Episode, Quote, SystemState, Delivery
+from core.models import User, Account, Plan, Episode, GroupEpisode, PublicAlert, Quote, SystemState, Delivery
 from core.market import is_trading, quote_fresh
 from core.plans import evaluate
 
@@ -38,7 +38,7 @@ def evaluate_all(now=None):
     if not quote:
         # A stale interval does not count as observing the condition leave.
         return
-    for plan_id,user_id in Plan.objects.filter(status='ACTIVE',user__is_active=True).values_list('pk','user_id'):
+    for plan_id,user_id in Plan.objects.filter(status='ACTIVE',public_alert__isnull=True,user__is_active=True).values_list('pk','user_id'):
         with transaction.atomic():
             user=User.objects.select_for_update().get(pk=user_id)
             if not user.is_active:continue
@@ -55,6 +55,20 @@ def evaluate_all(now=None):
             elif p.condition_met:
                 p.condition_met=False;p.save(update_fields=['condition_met'])
                 Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+    from core.public_alerts import lock_public_alerts
+    with transaction.atomic():
+        lock_public_alerts()
+        for rule in PublicAlert.objects.select_for_update().filter(active=True):
+            fake=Plan(side='INFO',alert_kind=rule.kind,direction=rule.direction,alert_threshold=rule.threshold)
+            result=evaluate(fake,None,quote.price,None,quote=quote)
+            if result['eligible']:
+                if not rule.condition_met:
+                    rule.episode_counter+=1;rule.condition_met=True;rule.save(update_fields=['episode_counter','condition_met'])
+                    GroupEpisode.objects.create(plan_rule=rule,version=rule.version,number=rule.episode_counter,next_at=now,context=result)
+                else:GroupEpisode.objects.filter(plan_rule=rule,version=rule.version,status='OPEN').update(context=result)
+            elif rule.condition_met:
+                rule.condition_met=False;rule.save(update_fields=['condition_met'])
+                GroupEpisode.objects.filter(plan_rule=rule,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
 
 def tick():
     close_old_connections()
@@ -67,6 +81,7 @@ def tick():
             # Unfinished attempts after process death may have reached the provider.
             Delivery.objects.filter(status='SENDING',created_at__lt=now-timedelta(minutes=3)).update(status='UNKNOWN',detail='进程中断，送达结果未确认')
             Episode.objects.filter(delivery__status='UNKNOWN',status='OPEN').update(status='UNKNOWN')
+            GroupEpisode.objects.filter(delivery__status='UNKNOWN',status='OPEN').update(status='UNKNOWN')
             state=SystemState.objects.filter(pk='market').first()
             if is_trading(now) or not state or (now-state.updated_at).total_seconds()>=300:
                 collect_quotes()

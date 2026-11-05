@@ -15,3 +15,10 @@
 @media(max-width:355px){.status-pill{font-size:12px}.page-heading{gap:8px}.price{font-size:40px}}
 
 .tab-bell{display:block;width:1em;height:1em}
+
+.market-hours{margin-top:14px;border:1px solid #eee8da;border-radius:12px;background:#faf8f2;color:#6e7169;font-size:13px;line-height:1.7}
+.market-hours summary{cursor:pointer;padding:9px 12px;color:#766338;font-weight:600}
+.market-hours summary span{float:right;color:#94968d;font-weight:400;font-size:12px}
+.market-hours-content{padding:0 12px 10px}
+.market-hours-content p{margin:6px 0;overflow-wrap:anywhere}
+.market-hours-content a{color:#86621f;text-decoration:underline;text-underline-offset:2px}

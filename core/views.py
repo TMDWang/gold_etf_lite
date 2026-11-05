@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import serializers as s
-from core.models import User, Account, Entry, Plan, Episode, Delivery, Quote, Minute, SystemState, Audit, PublicAlert
+from core.models import User, Account, Entry, Plan, Episode, GroupEpisode, Delivery, Quote, Minute, SystemState, Audit, PublicAlert
 from core.common import BusinessError
 from core.ledger import get_account, initialize, post_entry, require_initialized, effective_payloads
 from core.serializers import PlanSerializer, SettingsSerializer, AlertSerializer
@@ -176,59 +176,59 @@ class PublicAlertsAdminView(APIView):
     def get(self,request):
         return Response([public_rule_data(r) for r in PublicAlert.objects.filter(active=True).order_by('-id')])
     def post(self,request):
-        from core.public_alerts import lock_public_alerts, copy_values
+        from core.public_alerts import lock_public_alerts
         d=valid_public_rule(request.data)
         with transaction.atomic():
             lock_public_alerts()
             if PublicAlert.objects.filter(active=True).count()>=100:raise BusinessError('最多设置 100 条公共提醒')
             rule=PublicAlert.objects.create(**d)
-            for uid in User.objects.order_by('pk').values_list('pk',flat=True):
-                u=User.objects.select_for_update().get(pk=uid)
-                p=Plan(user=u,side='INFO',public_alert=rule);copy_values(p,rule);p.save()
             Audit.objects.create(actor=request.user,action='create_public_alert',object_id=str(rule.pk))
         return Response(public_rule_data(rule),status=201)
 
 class PublicAlertAdminDetailView(APIView):
     permission_classes=[AppAdmin]
     def patch(self,request,pk):
-        from core.public_alerts import lock_public_alerts, copy_values
+        from core.public_alerts import lock_public_alerts
         with transaction.atomic():
             lock_public_alerts();rule=get_object_or_404(PublicAlert.objects.select_for_update(),pk=pk,active=True)
             raw=public_rule_data(rule);raw.update(request.data);d=valid_public_rule(raw)
             for k,v in d.items():setattr(rule,k,v)
-            rule.save()
-            for uid in Plan.objects.filter(public_alert=rule).order_by('user_id').values_list('user_id',flat=True):
-                User.objects.select_for_update().get(pk=uid)
-                p=Plan.objects.select_for_update().get(user_id=uid,public_alert=rule)
-                copy_values(p,rule);p.version+=1;p.condition_met=False;p.save()
-                Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+            rule.version+=1;rule.condition_met=False;rule.save()
+            GroupEpisode.objects.filter(plan_rule=rule,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
             Audit.objects.create(actor=request.user,action='edit_public_alert',object_id=str(rule.pk))
         return Response(public_rule_data(rule))
     def delete(self,request,pk):
         from core.public_alerts import lock_public_alerts
         with transaction.atomic():
             lock_public_alerts();rule=get_object_or_404(PublicAlert.objects.select_for_update(),pk=pk,active=True)
-            rule.active=False;rule.save(update_fields=['active'])
-            for uid in Plan.objects.filter(public_alert=rule).order_by('user_id').values_list('user_id',flat=True):
-                User.objects.select_for_update().get(pk=uid)
-                p=Plan.objects.select_for_update().get(user_id=uid,public_alert=rule)
-                p.status='CANCELLED';p.version+=1;p.condition_met=False;p.save()
-                Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+            rule.active=False;rule.version+=1;rule.condition_met=False;rule.save()
+            GroupEpisode.objects.filter(plan_rule=rule,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
             Audit.objects.create(actor=request.user,action='delete_public_alert',object_id=str(rule.pk))
         return Response({'detail':'公共提醒已删除'})
 
 class PublicAlertsView(APIView):
     def get(self,request):
-        rows=Plan.objects.filter(user=request.user,public_alert__active=True).select_related('public_alert').order_by('-id')
-        return Response([{**alert_data(p),'subscription_id':p.pk,'id':p.public_alert_id} for p in rows])
-    def patch(self,request,pk):
-        if set(request.data)!={'enabled'} or not isinstance(request.data['enabled'],bool):raise s.ValidationError('只能设置是否接收')
+        return Response([public_rule_data(r) for r in PublicAlert.objects.filter(active=True).order_by('-id')])
+
+class GroupPushView(APIView):
+    permission_classes=[AppAdmin]
+    def get(self,request):
+        value=SystemState.objects.filter(pk='group-push').values_list('value',flat=True).first() or {}
+        return Response({'topic':value.get('topic',''),'token_bound':bool(value.get('token_encrypted'))})
+    def patch(self,request):
+        from core.public_alerts import lock_public_alerts
+        from core.push import encrypt_token
+        topic=s.RegexField(r'^[a-zA-Z0-9_-]{1,100}$').run_validation(request.data['topic']) if 'topic' in request.data else None
+        token=s.RegexField(r'^[a-zA-Z0-9]{20,100}$',allow_blank=True).run_validation(request.data['token']) if 'token' in request.data else None
         with transaction.atomic():
-            User.objects.select_for_update().get(pk=request.user.pk)
-            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,public_alert_id=pk,public_alert__active=True)
-            p.status='ACTIVE' if request.data['enabled'] else 'PAUSED';p.version+=1;p.condition_met=False;p.save()
-            Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
-        return Response({**alert_data(p),'subscription_id':p.pk,'id':p.public_alert_id})
+            lock_public_alerts()
+            state,_=SystemState.objects.select_for_update().get_or_create(key='group-push',defaults={'value':{}})
+            value=state.value or {}
+            if topic is not None:value['topic']=topic
+            if token is not None:value['token_encrypted']=encrypt_token(token) if token else ''
+            value['owner_id']=request.user.pk;state.value=value;state.save()
+            Audit.objects.create(actor=request.user,action='edit_group_push')
+        return self.get(request)
 
 class IgnoreView(APIView):
     def post(self,request,pk):
