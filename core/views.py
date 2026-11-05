@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import serializers as s
-from core.models import User, Account, Entry, Plan, Episode, Delivery, Quote, Minute, SystemState, Audit
+from core.models import User, Account, Entry, Plan, Episode, Delivery, Quote, Minute, SystemState, Audit, PublicAlert
 from core.common import BusinessError
 from core.ledger import get_account, initialize, post_entry, require_initialized, effective_payloads
 from core.serializers import PlanSerializer, SettingsSerializer, AlertSerializer
@@ -127,12 +127,12 @@ def set_alert_values(p,d):
 
 class AlertsView(APIView):
     def get(self,request):
-        return Response([alert_data(p) for p in Plan.objects.filter(user=request.user,side='INFO',status__in=['ACTIVE','PAUSED']).order_by('-id')])
+        return Response([alert_data(p) for p in Plan.objects.filter(user=request.user,side='INFO',public_alert__isnull=True,status__in=['ACTIVE','PAUSED']).order_by('-id')])
     def post(self,request):
         serializer=AlertSerializer(data=request.data);serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             User.objects.select_for_update().get(pk=request.user.pk)
-            if Plan.objects.filter(user=request.user,side='INFO',status__in=['ACTIVE','PAUSED']).count()>=100:raise BusinessError('最多设置 100 条行情提醒')
+            if Plan.objects.filter(user=request.user,side='INFO',public_alert__isnull=True,status__in=['ACTIVE','PAUSED']).count()>=100:raise BusinessError('最多设置 100 条行情提醒')
             p=Plan(user=request.user,side='INFO');set_alert_values(p,serializer.validated_data);p.save()
         return Response(alert_data(p),status=201)
 
@@ -140,7 +140,7 @@ class AlertDetailView(APIView):
     def patch(self,request,pk):
         with transaction.atomic():
             User.objects.select_for_update().get(pk=request.user.pk)
-            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',status__in=['ACTIVE','PAUSED'])
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',public_alert__isnull=True,status__in=['ACTIVE','PAUSED'])
             raw=alert_values(p);raw.update({k:v for k,v in request.data.items() if k!='enabled'})
             serializer=AlertSerializer(data=raw);serializer.is_valid(raise_exception=True)
             enabled=s.BooleanField().run_validation(request.data.get('enabled',p.status=='ACTIVE'))
@@ -150,7 +150,7 @@ class AlertDetailView(APIView):
     def delete(self,request,pk):
         with transaction.atomic():
             User.objects.select_for_update().get(pk=request.user.pk)
-            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',status__in=['ACTIVE','PAUSED'])
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',public_alert__isnull=True,status__in=['ACTIVE','PAUSED'])
             p.status='CANCELLED';p.version+=1;p.condition_met=False;p.save()
             Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
         return Response({'detail':'提醒已删除'})
@@ -162,6 +162,73 @@ class AlertIgnoreView(APIView):
             p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',status='ACTIVE')
             Episode.objects.filter(plan=p,version=p.version,status__in=['OPEN','UNKNOWN']).update(status='IGNORED')
         return Response({'detail':'本轮提醒已停止'})
+
+def public_rule_data(rule):
+    return {'id':rule.pk,'kind':rule.kind,'direction':rule.direction,'threshold':str(rule.threshold),'interval':rule.interval,'repeat_max':rule.repeat_max,'label':rule.label}
+
+def valid_public_rule(data):
+    serializer=AlertSerializer(data=data);serializer.is_valid(raise_exception=True)
+    if serializer.validated_data['kind']=='PCT_COST':raise s.ValidationError('公共提醒只能使用价格或相对昨收涨跌幅')
+    return serializer.validated_data
+
+class PublicAlertsAdminView(APIView):
+    permission_classes=[AppAdmin]
+    def get(self,request):
+        return Response([public_rule_data(r) for r in PublicAlert.objects.filter(active=True).order_by('-id')])
+    def post(self,request):
+        from core.public_alerts import lock_public_alerts, copy_values
+        d=valid_public_rule(request.data)
+        with transaction.atomic():
+            lock_public_alerts()
+            if PublicAlert.objects.filter(active=True).count()>=100:raise BusinessError('最多设置 100 条公共提醒')
+            rule=PublicAlert.objects.create(**d)
+            for uid in User.objects.order_by('pk').values_list('pk',flat=True):
+                u=User.objects.select_for_update().get(pk=uid)
+                p=Plan(user=u,side='INFO',public_alert=rule);copy_values(p,rule);p.save()
+            Audit.objects.create(actor=request.user,action='create_public_alert',object_id=str(rule.pk))
+        return Response(public_rule_data(rule),status=201)
+
+class PublicAlertAdminDetailView(APIView):
+    permission_classes=[AppAdmin]
+    def patch(self,request,pk):
+        from core.public_alerts import lock_public_alerts, copy_values
+        with transaction.atomic():
+            lock_public_alerts();rule=get_object_or_404(PublicAlert.objects.select_for_update(),pk=pk,active=True)
+            raw=public_rule_data(rule);raw.update(request.data);d=valid_public_rule(raw)
+            for k,v in d.items():setattr(rule,k,v)
+            rule.save()
+            for uid in Plan.objects.filter(public_alert=rule).order_by('user_id').values_list('user_id',flat=True):
+                User.objects.select_for_update().get(pk=uid)
+                p=Plan.objects.select_for_update().get(user_id=uid,public_alert=rule)
+                copy_values(p,rule);p.version+=1;p.condition_met=False;p.save()
+                Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+            Audit.objects.create(actor=request.user,action='edit_public_alert',object_id=str(rule.pk))
+        return Response(public_rule_data(rule))
+    def delete(self,request,pk):
+        from core.public_alerts import lock_public_alerts
+        with transaction.atomic():
+            lock_public_alerts();rule=get_object_or_404(PublicAlert.objects.select_for_update(),pk=pk,active=True)
+            rule.active=False;rule.save(update_fields=['active'])
+            for uid in Plan.objects.filter(public_alert=rule).order_by('user_id').values_list('user_id',flat=True):
+                User.objects.select_for_update().get(pk=uid)
+                p=Plan.objects.select_for_update().get(user_id=uid,public_alert=rule)
+                p.status='CANCELLED';p.version+=1;p.condition_met=False;p.save()
+                Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+            Audit.objects.create(actor=request.user,action='delete_public_alert',object_id=str(rule.pk))
+        return Response({'detail':'公共提醒已删除'})
+
+class PublicAlertsView(APIView):
+    def get(self,request):
+        rows=Plan.objects.filter(user=request.user,public_alert__active=True).select_related('public_alert').order_by('-id')
+        return Response([{**alert_data(p),'subscription_id':p.pk,'id':p.public_alert_id} for p in rows])
+    def patch(self,request,pk):
+        if set(request.data)!={'enabled'} or not isinstance(request.data['enabled'],bool):raise s.ValidationError('只能设置是否接收')
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,public_alert_id=pk,public_alert__active=True)
+            p.status='ACTIVE' if request.data['enabled'] else 'PAUSED';p.version+=1;p.condition_met=False;p.save()
+            Episode.objects.filter(plan=p,status__in=['OPEN','UNKNOWN']).update(status='CLOSED')
+        return Response({**alert_data(p),'subscription_id':p.pk,'id':p.public_alert_id})
 
 class IgnoreView(APIView):
     def post(self,request,pk):

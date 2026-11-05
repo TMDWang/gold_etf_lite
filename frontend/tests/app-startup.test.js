@@ -1,11 +1,11 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
-import {ref,reactive,computed,watch,defineAsyncComponent} from 'vue'
+import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
 import {createSectionLoader,createSessionRequests,resolveEpisodePlan} from '../src/loading.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,popup,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate}`)(deps)}
+function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,popup,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
@@ -23,4 +23,16 @@ test('actual episode action cannot open an unlinked manual trade when plans are 
  const state=app(async()=>[]);state.me.value={id:1};state.account.value={initialized_at:'now',shares:100}
  state.openEpisode({plan:7,version:3,side:'BUY'})
  assert.equal(state.popup.value,'');assert.equal(state.form.plan_id,undefined)
+})
+test('new version waits for active forms and requests, then activates automatically',async()=>{
+ let count=0;const s=app(async()=>[]);s.setWorker({activate(){count++}});s.me.value={id:1};s.loading.value=false;s.popup.value='trade';s.updateAvailable.value=true
+ await nextTick();assert.equal(count,0)
+ s.busy.value=true;s.popup.value='';await nextTick();assert.equal(count,0)
+ s.busy.value=false;await nextTick();assert.equal(count,1)
+})
+test('new version does not interrupt login or first account setup',async()=>{
+ let count=0;const s=app(async()=>[]);s.setWorker({activate(){count++}});s.loading.value=false;s.credentials.username='alice';s.updateAvailable.value=true
+ await nextTick();assert.equal(count,0)
+ s.me.value={id:1};s.account.value={initialized_at:null};s.init.budget='500';await nextTick();assert.equal(count,0)
+ s.init.budget='';await nextTick();assert.equal(count,1)
 })

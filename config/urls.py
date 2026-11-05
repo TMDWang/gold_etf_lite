@@ -37,6 +37,8 @@ urlpatterns = [
     path('api/entries/',v.EntriesView.as_view()),path('api/cash/',v.CashView.as_view()),path('api/entries/<int:pk>/correct/',v.CorrectView.as_view()),
     path('api/plans/',v.PlansView.as_view()),path('api/plans/<int:pk>/',v.PlanDetailView.as_view()),path('api/plans/<int:pk>/cancel/',v.CancelPlanView.as_view()),
     path('api/alerts/',v.AlertsView.as_view()),path('api/alerts/<int:pk>/',v.AlertDetailView.as_view()),path('api/alerts/<int:pk>/ignore/',v.AlertIgnoreView.as_view()),
+    path('api/public-alerts/',v.PublicAlertsView.as_view()),path('api/public-alerts/<int:pk>/',v.PublicAlertsView.as_view()),
+    path('api/admin/public-alerts/',v.PublicAlertsAdminView.as_view()),path('api/admin/public-alerts/<int:pk>/',v.PublicAlertAdminDetailView.as_view()),
     path('api/episodes/',v.EpisodesView.as_view()),path('api/episodes/<int:pk>/ignore/',v.IgnoreView.as_view()),
     path('api/settings/',v.SettingsView.as_view()),path('api/settings/test-push/',v.TestPushView.as_view()),path('api/deliveries/',v.DeliveryView.as_view()),
     path('api/market/',v.MarketView.as_view()),path('api/admin/invites/',a.InvitesView.as_view()),

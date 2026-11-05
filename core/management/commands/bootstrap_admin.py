@@ -12,6 +12,8 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, username, **options):
+        from core.public_alerts import lock_public_alerts, subscribe_new_user
+        lock_public_alerts()
         if User.objects.filter(is_app_admin=True).exists():
             raise CommandError('已存在应用管理员；不能用初始化命令追加管理员')
         if User.objects.filter(username=username).exists():
@@ -26,5 +28,6 @@ class Command(BaseCommand):
             raise CommandError('；'.join(exc.messages))
         user.set_password(password); user.save()
         Account.objects.create(user=user)
+        subscribe_new_user(user)
         Audit.objects.create(actor=user, action='bootstrap_admin', object_id=str(user.pk))
         self.stdout.write(self.style.SUCCESS('应用管理员已创建。请登录并初始化自己的账本。'))

@@ -67,6 +67,8 @@ class RegisterView(APIView):
         user=User(username=username)
         password_valid(password,user)
         with transaction.atomic():
+            from core.public_alerts import lock_public_alerts, subscribe_new_user
+            lock_public_alerts()
             invite=Invitation.objects.select_for_update().filter(code_hash=hashlib.sha256(code.strip().encode()).hexdigest()).first()
             if not invite or invite.used_by_id or invite.expires_at<=timezone.now():
                 raise BusinessError('邀请码无效、已使用或已过期')
@@ -74,6 +76,7 @@ class RegisterView(APIView):
             if User.objects.filter(username=username).exists():
                 raise BusinessError('用户名已被使用')
             user.set_password(password);user.save();Account.objects.create(user=user)
+            subscribe_new_user(user)
             invite.used_by=user;invite.save(update_fields=['used_by'])
             Audit.objects.create(actor=user,action='register',object_id=str(user.pk))
         login(request,user)

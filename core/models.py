@@ -32,8 +32,19 @@ class Account(models.Model):
     initialized_at = models.DateTimeField(null=True, blank=True)
 
 
+class PublicAlert(models.Model):
+    kind = models.CharField(max_length=10)
+    direction = models.CharField(max_length=5)
+    threshold = models.DecimalField(max_digits=12, decimal_places=4)
+    interval = models.PositiveIntegerField(default=30)
+    repeat_max = models.PositiveSmallIntegerField(default=3)
+    label = models.CharField(max_length=80, blank=True)
+    active = models.BooleanField(default=True)
+
+
 class Plan(models.Model):
     user = models.ForeignKey(User, on_delete=models.PROTECT)
+    public_alert = models.ForeignKey(PublicAlert, on_delete=models.PROTECT, null=True, blank=True)
     side = models.CharField(max_length=4, choices=[('BUY', '买入'), ('SELL', '卖出'), ('INFO', '行情提醒')])
     alert_kind = models.CharField(max_length=10, blank=True)
     alert_threshold = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
@@ -54,7 +65,7 @@ class Plan(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=['user', 'side'], condition=models.Q(status='ACTIVE', side__in=['BUY', 'SELL']), name='one_active_plan_per_side')]
+        constraints = [models.UniqueConstraint(fields=['user', 'side'], condition=models.Q(status='ACTIVE', side__in=['BUY', 'SELL']), name='one_active_plan_per_side'), models.UniqueConstraint(fields=['user', 'public_alert'], condition=models.Q(public_alert__isnull=False), name='one_public_alert_per_user')]
         indexes = [models.Index(fields=['user', 'status'])]
 
 
