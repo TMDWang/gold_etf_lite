@@ -1,6 +1,20 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {tradingChartData,chartExtremes} from '../src/price-chart.js'
+import {tradingChartData,chartExtremes,extremeMarkers} from '../src/price-chart.js'
+
+test('markers use actual visible extrema and remain inside the chart edges',()=>{
+  const chart=tradingChartData([{at:'2026-11-05T09:30:00+08:00',price:'4.9'},{at:'2026-11-05T15:00:00+08:00',price:'5.2'}])
+  const markers=extremeMarkers(chart)
+  assert.deepEqual(markers.map(x=>x.coord),[['09:30',4.9],['15:00',5.2]])
+  assert.equal(markers[0].label.formatter,'最低 4.900');assert.equal(markers[0].label.align,'left')
+  assert.equal(markers[1].label.formatter,'最高 5.200');assert.equal(markers[1].label.align,'right')
+})
+
+test('equal extrema use one combined marker and empty data has none',()=>{
+  assert.deepEqual(extremeMarkers(tradingChartData([])),[])
+  const markers=extremeMarkers(tradingChartData([{at:'2026-11-05T10:00:00+08:00',price:'5'}]))
+  assert.equal(markers.length,1);assert.equal(markers[0].label.formatter,'最高/最低 5.000')
+})
 
 test('highest and lowest are derived only from visible sampled prices',()=>{
   const points=[{at:'2026-11-05T09:30:00+08:00',price:'5.003'},{at:'2026-11-05T10:00:00+08:00',price:'5.123'},{at:'2026-11-05T11:45:00+08:00',price:'8.000'},{at:'2026-11-05T14:00:00+08:00',price:'4.991'}]

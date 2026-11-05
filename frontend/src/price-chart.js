@@ -28,3 +28,17 @@ export function chartExtremes(points) {
   const values=tradingChartData(points).prices.filter(value=>value!==null)
   return values.length?{high:Math.max(...values),low:Math.min(...values)}:{high:null,low:null}
 }
+
+// Mark the first visible occurrence, using the same data that is drawn on the curve.
+export function extremeMarkers({times,prices}) {
+  const values=prices.filter(value=>value!==null)
+  if(!values.length)return []
+  const low=Math.min(...values),high=Math.max(...values)
+  function marker(value,title,position) {
+    const index=prices.indexOf(value)
+    const align=index<30?'left':index>=prices.length-30?'right':'center'
+    return {coord:[times[index],value],value,label:{position,align,formatter:`${title} ${value.toFixed(3)}`}}
+  }
+  if(low===high)return [marker(low,'最高/最低','top')]
+  return [marker(low,'最低','bottom'),marker(high,'最高','top')]
+}
