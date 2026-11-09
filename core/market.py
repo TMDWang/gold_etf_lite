@@ -17,13 +17,33 @@ def trading_calendar():
     import exchange_calendars as xcals
     return xcals.get_calendar('XSHG')
 
+def calendar_end():
+    return trading_calendar().last_session.date()
+
+
+def calendar_status(now=None):
+    today = (now or timezone.now()).astimezone(CN).date()
+    try:
+        until = calendar_end()
+    except Exception:
+        return {'calendar_until': '不可用', 'calendar_valid': False,
+                'calendar_notice': '交易日历无法读取，自动提醒已暂停'}
+    remaining = (until - today).days
+    notice = ''
+    if remaining < 0:
+        notice = '交易日历已过期，自动提醒已暂停'
+    elif remaining <= 60:
+        notice = f'交易日历仅覆盖至 {until}，请在到期前核对上交所公告并更新'
+    return {'calendar_until': str(until), 'calendar_valid': remaining >= 0, 'calendar_notice': notice}
+
+
 def is_trading(now=None):
     now=(now or timezone.now()).astimezone(CN)
     clock=now.time().replace(tzinfo=None)
     if not (time(9,30)<=clock<=time(11,30) or time(13)<=clock<=time(15)):
         return False
     try:
-        return bool(trading_calendar().is_session(now.date().isoformat()))
+        return now.date() <= calendar_end() and bool(trading_calendar().is_session(now.date().isoformat()))
     except (ValueError,IndexError):
         # Calendar beyond its supported range must fail closed, never guess weekdays.
         return False
@@ -131,13 +151,11 @@ def market_data():
     start=datetime.combine(today,time.min,tzinfo=CN)
     points=Minute.objects.filter(at__gte=start,at__lt=start+timedelta(days=1)).order_by('at')
     sampled=points.exclude(source='eastmoney-minute').exists()
-    try:calendar_until=str(trading_calendar().last_session.date())
-    except Exception:calendar_until='不可用'
-    calendar_valid=calendar_until!='不可用' and str(today)<=calendar_until
+    calendar=calendar_status(now)
     message=state.get('message','等待首次采集；行情未就绪时到价提醒暂停')
-    if not calendar_valid:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
+    if not calendar['calendar_valid']:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
     if settings.PAUSE_NOTIFICATIONS:message='维护模式：自动提醒已暂停，可核对账目及计划'
-    return {'backend_version':backend_version(),'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at,'fetched_at':q.fetched_at} if q else None,'fresh':fresh and calendar_valid and not settings.PAUSE_NOTIFICATIONS,'session_open':is_trading(now),'message':message,'calendar_until':calendar_until,'notifications_paused':settings.PAUSE_NOTIFICATIONS,'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,'curve_date':str(today),'points':[{'at':m.at,'price':str(m.price)} for m in points],'curve_note':'含采集时点数据；缺失区间留空，不是完整分钟历史。' if sampled else '显示今天已取得的分钟数据；缺失区间留空。'}
+    return {'backend_version':backend_version(),'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at,'fetched_at':q.fetched_at} if q else None,'fresh':fresh and calendar['calendar_valid'] and not settings.PAUSE_NOTIFICATIONS,'session_open':is_trading(now),'message':message,**calendar,'notifications_paused':settings.PAUSE_NOTIFICATIONS,'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,'curve_date':str(today),'points':[{'at':m.at,'price':str(m.price)} for m in points],'curve_note':'含采集时点数据；缺失区间留空，不是完整分钟历史。' if sampled else '显示今天已取得的分钟数据；缺失区间留空。'}
 
 def price_data():
     """Small shared quote snapshot: no account data or full chart history."""
@@ -146,13 +164,11 @@ def price_data():
     open_now=is_trading(now);fresh=quote_fresh(q,now) and open_now and state.get('available',True)
     start=datetime.combine(today,time.min,tzinfo=CN)
     point=Minute.objects.filter(at__gte=start,at__lt=start+timedelta(days=1)).order_by('-at').first()
-    try:calendar_until=str(trading_calendar().last_session.date())
-    except Exception:calendar_until='不可用'
-    calendar_valid=calendar_until!='不可用' and str(today)<=calendar_until
+    calendar=calendar_status(now)
     message=state.get('message','等待首次采集；行情未就绪时到价提醒暂停')
-    if not calendar_valid:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
+    if not calendar['calendar_valid']:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
     if settings.PAUSE_NOTIFICATIONS:message='维护模式：自动提醒已暂停，可核对账目及计划'
     return {'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at.isoformat(),'fetched_at':q.fetched_at.isoformat()} if q else None,
-        'fresh':fresh and calendar_valid and not settings.PAUSE_NOTIFICATIONS,'session_open':open_now,'message':message,
+        'fresh':fresh and calendar['calendar_valid'] and not settings.PAUSE_NOTIFICATIONS,'session_open':open_now,'message':message,**calendar,
         'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,
         'curve_date':str(today),'latest_point':{'at':point.at.isoformat(),'price':str(point.price)} if point else None}

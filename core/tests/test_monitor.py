@@ -77,11 +77,45 @@ class MonitorTests(TestCase):
             self.assertEqual(Delivery.objects.get().status, 'UNKNOWN')
             self.assertEqual(Episode.objects.get().status, 'UNKNOWN')
 
+    def test_delivery_finishes_without_reopening_an_ignored_episode(self):
+        from django.db import connection
+        from core.push import deliver_due, encrypt_token
+        from cryptography.fernet import Fernet
+        with override_settings(ENCRYPTION_KEY=Fernet.generate_key().decode()):
+            self.u.token_encrypted = encrypt_token('a'*32)
+            self.u.save()
+            self.tick()
+            outer_savepoints = list(connection.savepoint_ids)
+
+            def send(*args, **kwargs):
+                self.assertEqual(connection.savepoint_ids, outer_savepoints)
+                Episode.objects.update(status='IGNORED')
+                return 'UNKNOWN', '结果未确认'
+
+            with patch('core.push.send_http', side_effect=send), patch('core.push.timezone.now',return_value=NOW):
+                deliver_due(NOW)
+            self.assertEqual(Delivery.objects.get().status, 'UNKNOWN')
+            self.assertEqual(Episode.objects.get().status, 'IGNORED')
+
     def test_disabled_user_never_gets_alert(self):
         self.u.is_active=False; self.u.save(); self.tick()
         self.assertFalse(Episode.objects.exists())
 
 class MarketTests(TestCase):
+    def test_calendar_warns_before_expiry_and_fails_closed_afterwards(self):
+        from core.market import calendar_status, market_data, is_trading
+        from datetime import date
+
+        with patch('core.market.calendar_end', return_value=date(2026, 12, 31)):
+            self.assertEqual(calendar_status(NOW)['calendar_notice'], '')
+            near_expiry = NOW.replace(month=12, day=1)
+            self.assertIn('2026-12-31', calendar_status(near_expiry)['calendar_notice'])
+            expired = NOW.replace(year=2027, month=1, day=4)
+            with patch('core.market.timezone.now', return_value=expired):
+                self.assertFalse(is_trading(expired))
+                self.assertFalse(market_data()['fresh'])
+                self.assertIn('暂停', market_data()['message'])
+
     def test_market_sessions_and_holidays(self):
         from core.market import is_trading
         self.assertTrue(is_trading(NOW))

@@ -20,6 +20,7 @@ class UpdateScriptTests(SimpleTestCase):
 printf 'git %s\\n' "$*" >> "$PWD/commands.log"
 case "$*" in
   'rev-parse --show-toplevel') pwd;;
+  'rev-parse HEAD') printf '%s\n' 'test-sha';;
   'symbolic-ref --quiet --short HEAD') printf '%s\\n' "${TEST_BRANCH:-main}";;
   'status --porcelain') [ "${TEST_DIRTY:-0}" = 1 ] && printf ' M file\\n'; exit 0;;
   'pull --ff-only origin main') [ "${TEST_PULL_FAIL:-0}" = 0 ] || exit 1;;
@@ -31,8 +32,10 @@ printf 'docker %s\\n' "$*" >> "$PWD/commands.log"
 case "$*" in
   'info') exit 0;;
   'compose exec -T app python manage.py backup') [ "${TEST_BACKUP_FAIL:-0}" = 0 ] || exit 1;;
-  'compose up -d --build') [ "${TEST_BUILD_FAIL:-0}" = 0 ] || exit 1;;
+  'compose up -d --build --wait --wait-timeout 240') [ "${TEST_BUILD_FAIL:-0}" = 0 ] || exit 1;;
   'compose ps') exit 0;;
+  'compose ps -q app') printf '%s\n' 'test-app';;
+  inspect*) printf '%s\n' "${TEST_RUNNING_REVISION:-test-sha}";;
   *) exit 2;;
 esac
 ''',encoding='utf-8')
@@ -55,7 +58,7 @@ esac
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         calls=self.calls()
         self.assertLess(calls.index('docker compose exec -T app python manage.py backup'),calls.index('git pull --ff-only origin main'))
-        self.assertLess(calls.index('git pull --ff-only origin main'),calls.index('docker compose up -d --build'))
+        self.assertLess(calls.index('git pull --ff-only origin main'),calls.index('docker compose up -d --build --wait --wait-timeout 240'))
         self.assertIn('docker compose ps',calls)
 
     def test_failed_backup_or_dirty_checkout_never_pulls_or_rebuilds(self):
@@ -74,4 +77,15 @@ esac
         (self.project/'commands.log').unlink()
         result=self.run_update(TEST_PULL_FAIL='1')
         self.assertNotEqual(result.returncode,0)
-        self.assertNotIn('docker compose up -d --build',self.calls())
+        self.assertNotIn('docker compose up -d --build --wait --wait-timeout 240',self.calls())
+
+    def test_running_revision_must_match_the_checkout(self):
+        result = self.run_update(TEST_RUNNING_REVISION='stale')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('stale', result.stderr)
+
+    def test_failed_health_wait_reports_status_and_exits(self):
+        result = self.run_update(TEST_BUILD_FAIL='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('docker compose ps', self.calls())
+        self.assertIn('健康', result.stderr)

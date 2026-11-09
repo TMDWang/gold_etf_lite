@@ -19,6 +19,7 @@ const form=reactive({}), entryKey=ref(''), cashForm=reactive({amount:'',reason:'
 const buyPreviewForm=reactive({price:'',quantity:'100',fee:''}), buyPreviewResult=ref(null)
 let previewRevision=0
 let timer
+let streamNeedsMarket=false
 let shellWorker,quoteStream,latestPriceEvent=null,bootstrapVersion=0
 const requests=createSessionRequests({request:rawApi,submit:rawPost})
 const api=(...args)=>requests.request(...args)
@@ -31,7 +32,7 @@ function retryNetwork(){for(const key of networkKeys.value)void loader.run(key,{
 const sections={
   account:{state:sectionState.account,load:opts=>api('/account/',opts),apply:v=>{account.value=v},clear:()=>{account.value=null}},
   market:{state:sectionState.market,load:opts=>api('/market/',opts),apply:applyMarketSnapshot,clear:()=>{market.value={points:[]};latestPriceEvent=null}},
-  quote:{state:sectionState.quote,load:opts=>api('/quote/',opts),apply:applyPrice},
+  quote:{state:sectionState.quote,load:opts=>api('/quote/',opts),apply:syncQuote},
   plans:{state:sectionState.plans,load:opts=>api('/plans/',opts),apply:v=>{plans.value=v},clear:()=>{plans.value=[]}},
   episodes:{state:sectionState.episodes,load:opts=>api('/episodes/',opts),apply:v=>{episodes.value=v},clear:()=>{episodes.value=[]}},
   entries:{state:sectionState.entries,load:opts=>api(`/entries/?page=${entryPage.value}`,opts),apply:v=>{entries.value=v.results;entryCount.value=v.count},clear:()=>{entries.value=[];entryCount.value=0}},
@@ -50,18 +51,37 @@ const pnlClass=v=>Number(v)>0?'gain':Number(v)<0?'loss':''
 const fmtTime=v=>v?new Date(v).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'暂无'
 const initialized=computed(()=>!!account.value?.initialized_at)
 const liveEpisodes=computed(()=>episodes.value.filter(e=>['OPEN','UNKNOWN'].includes(e.status)))
-function applyMarketSnapshot(value){market.value=value;if(latestPriceEvent)applyPrice(latestPriceEvent)}
+function applyMarketSnapshot(value){
+  if(value.curve_date && market.value.curve_date && value.curve_date<market.value.curve_date)return
+  market.value=value
+  if(latestPriceEvent)applyPrice(latestPriceEvent)
+}
+function syncQuote(value, fromStream=false){
+  const previous=market.value
+  applyPrice(value)
+  if(market.value===previous || value.unavailable)return
+  const reconnected=fromStream && streamNeedsMarket
+  if(fromStream){
+    loader.dismiss('quote')
+    streamNeedsMarket=false
+  }
+  const priceChanged=!!value.quote && previous.quote?.price!==value.quote.price
+  const sessionChanged=previous.session_open!==undefined && previous.session_open!==market.value.session_open
+  if(tab.value==='home' && (priceChanged || sessionChanged || reconnected))void loader.run('market',{force:true})
+}
+function acceptStreamPrice(value){syncQuote(value,true)}
 function applyPrice(value){
   if(!me.value||!value||typeof value!=='object')return
+  if(market.value.curve_date&&value.curve_date&&value.curve_date<market.value.curve_date)return
   if(value.status_only){
     const changedDay=market.value.curve_date&&value.curve_date&&market.value.curve_date!==value.curve_date
     market.value={...market.value,...value,points:changedDay?[]:market.value.points}
-    if(latestPriceEvent)latestPriceEvent={...latestPriceEvent,...value,status_only:false}
+    if(changedDay)latestPriceEvent=null
+    else if(latestPriceEvent)latestPriceEvent={...latestPriceEvent,...value,status_only:false}
     if(changedDay&&tab.value==='home')void loader.run('market',{force:true})
     return
   }
   if(value.unavailable){market.value={...market.value,fresh:false,message:value.message||'行情暂不可用'};return}
-  if(market.value.curve_date&&value.curve_date&&value.curve_date<market.value.curve_date)return
   const old=market.value.quote, incoming=value.quote
   if(old&&incoming&&Date.parse(incoming.source_at)<Date.parse(old.source_at))return
   latestPriceEvent=value
@@ -134,7 +154,7 @@ watch(safeToUpdate,ready=>{if(ready)applyUpdate()})
 watch(()=>[buyPreviewForm.price,buyPreviewForm.quantity,buyPreviewForm.fee,account.value?.cash,account.value?.shares,account.value?.cost_basis],()=>{previewRevision++;buyPreviewResult.value=null},{flush:'sync'})
 watch(tab,()=>refresh({force:true}))
 watch(me,user=>{if(!quoteStream)return;if(!user)quoteStream.stop();else if(document.visibilityState==='visible')quoteStream.start()})
-onMounted(()=>{shellWorker=registerShellWorker(()=>{updateAvailable.value=true},undefined,undefined,()=>safeToUpdate.value);quoteStream=createPriceStream({onPrice:applyPrice,onState:value=>{streamState.value=value},onFallback:()=>{void loader.run('quote',{force:true})},onOpen:()=>{if(tab.value==='home')void loader.run('market',{maxAgeMs:20000})}});void bootstrap();timer=setInterval(()=>{if(document.visibilityState==='visible')shellWorker?.check()},30000);document.addEventListener('visibilitychange',onVisible);window.addEventListener('online',onOnline)})
+onMounted(()=>{shellWorker=registerShellWorker(()=>{updateAvailable.value=true},undefined,undefined,()=>safeToUpdate.value);quoteStream=createPriceStream({onPrice:acceptStreamPrice,onState:value=>{streamState.value=value},onFallback:()=>{void loader.run('quote',{force:true})},onOpen:()=>{streamNeedsMarket=true}});void bootstrap();timer=setInterval(()=>{if(document.visibilityState==='visible')shellWorker?.check()},30000);document.addEventListener('visibilitychange',onVisible);window.addEventListener('online',onOnline)})
 onBeforeUnmount(()=>{bootstrapVersion++;quoteStream?.stop();loader.reset();shellWorker?.dispose();clearInterval(timer);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('online',onOnline)})
 </script>
 
@@ -170,7 +190,7 @@ onBeforeUnmount(()=>{bootstrapVersion++;quoteStream?.stop();loader.reset();shell
           <section class="card price-card"><SectionStatus :state="displayState('market')" label="行情" @retry="loader.run('market',{force:true})"/><div class="row"><span class="muted">华安黄金 ETF <small>518880</small></span><span class="tiny">{{market.quote?.source||'暂无来源'}}</span></div><div class="price-row"><strong class="price">{{price?Number(price).toFixed(3):'—'}}<small>元</small></strong><span v-if="market.change_percent!=null" class="change" :class="pnlClass(market.change_percent)">{{signed(market.change_percent)}}%</span></div><p class="tiny">源数据时间 {{fmtTime(market.quote?.source_at)}}</p>
             <details class="market-hours"><summary>交易与休市时间 <span>北京时间</span></summary><div class="market-hours-content"><p><strong>交易日：</strong>通常为周一至周五，周末及交易所公告休市日休市。</p><p><strong>交易时间：</strong>9:15–9:25 开盘集合竞价；9:30–11:30、13:00–15:00 交易。</p><p><strong>午间休市：</strong>11:30–13:00。</p><p><strong>本应用提醒：</strong>交易日的 9:30–11:30、13:00–15:00，且行情有效时检查；开盘集合竞价不监测。日历不保证覆盖临时停牌或临时休市，请以交易所公告为准。</p><a href="https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml" target="_blank" rel="noopener noreferrer">查看上交所交易规则 ↗</a></div></details>
             <div class="chart-caption"><strong>今日分时</strong><span>{{market.curve_date||'—'}} · 北京时间</span></div><PriceChart v-if="market.points.length" :points="market.points" /><div v-else class="chart-empty"><van-icon name="chart-trending-o" size="30"/><span>今日曲线还在等待数据</span><small>收到有效行情后显示，不补画缺失区间</small></div><p class="hint curve-note">午间休市已压缩。{{market.curve_note||'显示已取得的数据，缺口留空；采样不保证捕获每次瞬间到价。'}}</p>
-            <div v-if="streamState==='fallback' && !networkKeys.length" class="subtle-notice">实时连接暂不可用，正在通过普通请求获取行情并尝试重连。</div><SectionStatus :state="displayState('quote')" label="行情连接" @retry="loader.run('quote',{force:true})"/><div v-if="!market.fresh" class="subtle-notice">{{market.message||'行情尚未就绪，到价提醒暂停。记账仍可使用。'}}</div>
+            <div v-if="streamState==='fallback' && !networkKeys.length" class="subtle-notice">实时连接暂不可用，正在通过普通请求获取行情并尝试重连。</div><SectionStatus :state="displayState('quote')" label="行情连接" @retry="loader.run('quote',{force:true})"/><div v-if="me.is_app_admin && market.calendar_valid && market.calendar_notice" class="subtle-notice">{{market.calendar_notice}}</div><div v-if="!market.fresh" class="subtle-notice">{{market.message||'行情尚未就绪，到价提醒暂停。记账仍可使用。'}}</div>
           </section>
           <SectionStatus :state="displayState('episodes')" label="提醒" @retry="loader.run('episodes',{force:true})"/><section v-if="liveEpisodes.length" class="alert-stack"><article v-for="e in liveEpisodes" :key="e.id" class="card alert-card"><div class="row"><strong>{{e.side==='BUY'?'买入':'卖出'}}条件已达到</strong><span class="status-pill">{{e.status==='UNKNOWN'?'推送结果未确认':'待处理'}}</span></div><p>{{e.context.reason}} · 参考价 {{e.context.price}}</p><div class="button-row"><van-button size="small" type="primary" round :disabled="!resolveEpisodePlan(e,plans)" @click="openEpisode(e)">确认实际成交</van-button><van-button size="small" plain round @click="ignore(e)">暂不操作</van-button></div></article></section>
 

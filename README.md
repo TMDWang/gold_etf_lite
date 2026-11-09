@@ -147,7 +147,7 @@ git pull --ff-only origin main
 sh deploy/update.sh
 ```
 
-以后在应用正在运行时，只需在该目录执行 `sh deploy/update.sh`。脚本会检查 `main` 和工作区干净，依次备份数据库、以 `--ff-only` 拉取、重建并启动容器、显示容器状态；某一步失败就停止。如果当前用户没有 Docker 权限，脚本会请求 sudo。请等待健康检查结束并确认 app 和 db 都显示 healthy。脚本不会自动解决代码冲突；有本地更改或拉取失败时，请先检查并保留现场。备份需要应用和数据库正常运行；备份失败时先处理故障。
+以后在应用正在运行时，只需在该目录执行 `sh deploy/update.sh`。脚本会检查 `main` 和工作区干净，依次备份数据库、以 `--ff-only` 拉取、重建并启动容器、等待 app 和 db 健康、核对运行容器的 Git 提交号；某一步失败就停止。如果当前用户没有 Docker 权限，脚本会请求 sudo。健康等待最多 240 秒，需要 Docker Compose 支持 `up --wait`。脚本不会自动解决代码冲突；有本地更改或拉取失败时，请先检查并保留现场。备份需要应用和数据库正常运行；备份失败时先处理故障。
 
 启动自动运行数据库迁移。更新前保留旧版本信息与 `.env`；数据库升级后不要直接用旧代码回退。重新构建或重建容器会沿用同一目录下的数据挂载；不要运行 `docker compose down -v`、删除项目目录或删除 `data/postgres`。恢复步骤见下方链接。
 
@@ -185,7 +185,7 @@ python manage.py test
 
 本地启动另设 `DEBUG=1`、随机 `SECRET_KEY`；运行 `python manage.py migrate`、`python manage.py collectstatic --noinput` 后 `python -m waitress --listen=127.0.0.1:8000 config.wsgi:application`。监测另开终端运行 `python manage.py monitor`；可选真实推送仍须配置 ENCRYPTION_KEY。本地只使用测试账号和虚构金额。不要将 DEBUG=1 用于对外部署。
 
-交易日历由固定版本 `exchange-calendars` 的 XSHG 提供。本次实测覆盖到 **2026-12-31**。超过有效范围停止提醒，需要维护者根据正式交易所日历更新依赖并验证，不按工作日猜测开市日期。源接口变化、免费限流及 NAS 网络也需要维护。
+交易日历由固定版本 `exchange-calendars` 的 XSHG 提供。本次实测覆盖到 **2026-12-31**。首页在到期前 60 天向应用管理员显示提醒。超过有效范围暂停自动提醒，维护者应根据正式交易所日历更新依赖并验证，不按工作日猜测开市日期。源接口变化、免费限流及 NAS 网络也需要维护。
 
 ## 主要依据
 

@@ -31,15 +31,37 @@ else
     exit 1
 fi
 docker_cmd() {
-    if [ "$use_sudo" = 1 ]; then sudo docker "$@"; else docker "$@"; fi
+    if [ "$use_sudo" = 1 ]; then
+        sudo GOLD_ETF_BUILD_REVISION="${GOLD_ETF_BUILD_REVISION:-unknown}" docker "$@"
+    else
+        docker "$@"
+    fi
 }
 
+previous_revision=$(git rev-parse HEAD)
 printf '%s\n' '1/4 正在备份数据库…'
 docker_cmd compose exec -T app python manage.py backup
 printf '%s\n' '2/4 正在安全拉取 main 分支…'
 git pull --ff-only origin main
-printf '%s\n' '3/4 正在构建并启动容器…'
-docker_cmd compose up -d --build
-printf '%s\n' '4/4 当前容器状态：'
+GOLD_ETF_BUILD_REVISION=$(git rev-parse HEAD)
+export GOLD_ETF_BUILD_REVISION
+
+printf '%s\n' '3/4 正在构建并等待 app 和 db 健康…'
+if ! docker_cmd compose up -d --build --wait --wait-timeout 240; then
+    docker_cmd compose ps >&2 || true
+    printf '%s\n' '构建、启动或健康检查失败，请查看上方错误及容器状态。' >&2
+    exit 1
+fi
+
+printf '%s\n' '4/4 正在核对运行版本…'
+app_id=$(docker_cmd compose ps -q app)
+running_revision=''
+if [ -n "$app_id" ]; then
+    running_revision=$(docker_cmd inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$app_id")
+fi
+if [ "$running_revision" != "$GOLD_ETF_BUILD_REVISION" ]; then
+    printf '运行版本不符：期望 %s，实际 %s。\n' "$GOLD_ETF_BUILD_REVISION" "${running_revision:-未知}" >&2
+    exit 1
+fi
 docker_cmd compose ps
-printf '%s\n' '更新命令已执行，请等待健康检查完成并确认 app 和 db 均为 healthy。'
+printf '更新验收通过：%s → %s\n' "$previous_revision" "$running_revision"

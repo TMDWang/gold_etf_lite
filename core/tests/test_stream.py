@@ -60,6 +60,7 @@ class PriceEndpointTests(TestCase):
         response=async_to_sync(AsyncClient().get)('/api/quote/stream/')
         self.assertIn(response.status_code,[401,403])
 
+class StreamIntegrationTests(TransactionTestCase):
     def test_stream_session_validation_respects_disable_and_logout(self):
         from core.price_stream import _session_valid
         user=User.objects.create_user('member');client=APIClient();client.force_login(user)
@@ -68,7 +69,6 @@ class PriceEndpointTests(TestCase):
         user.is_active=False;user.save(update_fields=['is_active']);self.assertFalse(_session_valid(key))
         user.is_active=True;user.save(update_fields=['is_active']);client.logout();self.assertFalse(_session_valid(key))
 
-class StreamIntegrationTests(TransactionTestCase):
     async def test_authenticated_async_stream_starts_and_remains_private(self):
         from asgiref.sync import sync_to_async
         user=await sync_to_async(User.objects.create_user)('stream-user')

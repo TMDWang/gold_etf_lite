@@ -28,6 +28,8 @@ RUN useradd --uid 10001 --create-home appuser && \
     su -s /bin/sh appuser -c 'SECRET_KEY=build-only DEBUG=1 python -c "from config.wsgi import application; from config.asgi import application as async_application; from pathlib import Path; assert Path(\"frontend/dist/index.html\").read_bytes()"' && \
     SECRET_KEY=build-only DEBUG=1 python manage.py collectstatic --noinput && \
     mkdir -p /backups && chown appuser:appuser /backups
+ARG APP_REVISION=unknown
+LABEL org.opencontainers.image.revision="${APP_REVISION}"
 EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sh", "deploy/start.sh"]

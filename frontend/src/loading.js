@@ -66,5 +66,12 @@ export function createSectionLoader({sections, onUnauthorized = () => {}, now = 
     })()
     return job.promise
   }
-  return {run, reset, invalidate}
+  function dismiss(key) {
+    active.get(key)?.controller.abort()
+    active.delete(key)
+    lastSuccess.delete(key)
+    sections[key].state.pending = false
+    sections[key].state.error = ''
+  }
+  return {run, reset, invalidate, dismiss}
 }

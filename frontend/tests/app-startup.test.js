@@ -5,7 +5,7 @@ import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
 import {createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice} from '../src/loading.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,applyPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
+function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,applyPrice,acceptStreamPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
@@ -75,4 +75,33 @@ test('a status-only event updates availability without changing the displayed pr
  s.market.value={quote:{price:'4.000',source_at:'2026-11-05T02:00:00Z'},fresh:true,session_open:true,curve_date:'2026-11-05',points:[]}
  s.applyPrice({status_only:true,fresh:false,session_open:false,curve_date:'2026-11-05',message:'休市'})
  assert.equal(s.market.value.quote.price,'4.000');assert.equal(s.market.value.fresh,false);assert.equal(s.market.value.message,'休市')
+})
+
+
+test('a recovered price stream replaces the old fallback failure but preserves account errors',async()=>{
+ let rejectQuote
+ const quote=new Promise((_,reject)=>{rejectQuote=reject})
+ const s=app(async path=>path==='/quote/'?quote:{points:[]})
+ s.me.value={id:1}
+ s.sectionState.account.error='账户读取失败'
+ const fallback=s.loader.run('quote')
+ s.acceptStreamPrice({quote:{price:'4.500',source_at:'2026-11-05T02:00:00Z'},curve_date:'2026-11-05'})
+ rejectQuote(new Error('旧连接失败'))
+ await fallback
+ assert.equal(s.sectionState.quote.error,'')
+ assert.equal(s.sectionState.quote.pending,false)
+ assert.equal(s.sectionState.account.error,'账户读取失败')
+})
+
+test('a changed price reconciles the real same-price points missed by the stream',async()=>{
+ const at=minute=>`2026-11-05T02:0${minute}:00Z`
+ const points=[{at:at(0),price:'4.500'},{at:at(1),price:'4.500'},{at:at(2),price:'4.501'}]
+ const snapshot={curve_date:'2026-11-05',points,quote:{price:'4.501',source_at:at(2)}}
+ const s=app(async()=>snapshot)
+ s.me.value={id:1}
+ s.market.value={curve_date:'2026-11-05',points:points.slice(0,1),quote:{price:'4.500',source_at:at(0)}}
+ s.acceptStreamPrice({...snapshot,points:undefined,latest_point:points[2]})
+ await Promise.resolve()
+ await Promise.resolve()
+ assert.deepEqual(s.market.value.points,points)
 })

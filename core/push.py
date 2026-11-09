@@ -5,6 +5,7 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from core.models import User, Account, Plan, Episode, GroupEpisode, PublicAlert, SystemState, Delivery
 from core.common import BusinessError, throttle
@@ -76,6 +77,20 @@ def send_test(user):
     Delivery.objects.filter(pk=row.pk).update(status=status,detail=detail)
     return {'status':status,'detail':detail}
 
+@transaction.atomic
+def finish_delivery(delivery, episode, status, detail, send_now, repeat_minutes, failures):
+    updated = Delivery.objects.filter(pk=delivery.pk, status='SENDING').update(status=status, detail=detail)
+    if not updated:
+        return
+    active = type(episode).objects.filter(pk=episode.pk, version=episode.version, status='OPEN')
+    if status == 'SENT':
+        active.update(sent_count=F('sent_count') + 1, next_at=send_now + timedelta(minutes=repeat_minutes))
+    elif status == 'UNKNOWN':
+        active.update(status='UNKNOWN')
+    else:
+        active.update(next_at=send_now + timedelta(minutes=5 * (failures + 1)))
+
+
 def deliver_due(now=None):
     if settings.PAUSE_NOTIFICATIONS:return
     now=now or timezone.now()
@@ -131,15 +146,9 @@ def deliver_due(now=None):
             if not reserve_content(d,token,content,send_now):
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='同内容发送已到本小时上限')
                 e.next_at=now+timedelta(hours=1);e.save(update_fields=['next_at']);continue
-            status,detail=send_http(token,title,content)
-            Delivery.objects.filter(pk=d.pk).update(status=status,detail=detail)
-            if status=='SENT':
-                e.sent_count+=1;e.next_at=send_now+timedelta(minutes=p.alert_interval if p.side=='INFO' else u.reminder_minutes)
-            elif status=='UNKNOWN':
-                e.status='UNKNOWN'
-            else:
-                e.next_at=send_now+timedelta(minutes=5*(failures+1))
-            e.save(update_fields=['sent_count','next_at','status'])
+            repeat_minutes = p.alert_interval if p.side == 'INFO' else u.reminder_minutes
+        status, detail = send_http(token, title, content)
+        finish_delivery(d, e, status, detail, send_now, repeat_minutes, failures)
     deliver_group_due(now)
 
 def deliver_group_due(now):
@@ -182,9 +191,7 @@ def deliver_group_due(now):
             if not reserve_content(d,token,content,send_now):
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='同内容发送已到本小时上限')
                 e.next_at=send_now+timedelta(hours=1);e.save(update_fields=['next_at']);continue
-            status,detail=send_http(token,'金笺 · 518880 公共行情提醒',content,topic=config['topic'])
-            Delivery.objects.filter(pk=d.pk).update(status=status,detail=detail)
-            if status=='SENT':e.sent_count+=1;e.next_at=send_now+timedelta(minutes=rule.interval)
-            elif status=='UNKNOWN':e.status='UNKNOWN'
-            else:e.next_at=send_now+timedelta(minutes=5*(failures+1))
-            e.save(update_fields=['sent_count','next_at','status'])
+            repeat_minutes = rule.interval
+            topic = config['topic']
+        status, detail = send_http(token, '金笺 · 518880 公共行情提醒', content, topic=topic)
+        finish_delivery(d, e, status, detail, send_now, repeat_minutes, failures)

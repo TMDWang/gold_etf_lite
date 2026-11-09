@@ -38,7 +38,7 @@ class PriceHub:
         previous=self.latest
         def price(item):
             return (item.get('quote') or {}).get('price',item.get('price'))
-        keys=('fresh','session_open','unavailable','curve_date')
+        keys=('fresh','session_open','unavailable','curve_date','calendar_until','calendar_valid','calendar_notice')
         if previous is None or price(previous)!=price(value):
             self.publish(value)
         elif any(previous.get(k)!=value.get(k) for k in keys):

@@ -3,7 +3,7 @@
 SQLite cannot demonstrate PostgreSQL row/advisory locking. Explicitly skipped there.
 """
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 from unittest import skipUnless
 from django.db import connection,close_old_connections
 from django.test import TransactionTestCase
@@ -46,3 +46,51 @@ class ConcurrencyTests(TransactionTestCase):
         def op(n):
             return APIClient().post('/api/auth/register/',{'code':code,'username':f'friend{n}','password':'Another-safe-password42!'},format='json').status_code
         self.assertEqual(sorted(self.parallel(op)),[201,400])
+
+
+    def test_ledger_can_write_while_pushplus_is_waiting(self):
+        from unittest.mock import patch
+        from cryptography.fernet import Fernet
+        from django.test import override_settings
+        from core.models import Delivery, Plan, Quote
+        from core.monitor import evaluate_all
+        from core.push import deliver_due, encrypt_token
+        from core.tests.test_monitor import NOW
+
+        started, ledger_written = Event(), Event()
+
+        def send(*args, **kwargs):
+            started.set()
+            if not ledger_written.wait(5):
+                raise AssertionError('PushPlus 持锁期间账本无法写入')
+            return 'SENT', 'ok'
+
+        def deliver():
+            try:
+                deliver_due(NOW)
+            finally:
+                close_old_connections()
+
+        with override_settings(ENCRYPTION_KEY=Fernet.generate_key().decode()):
+            self.u.fee_rate = 0
+            self.u.fee_minimum = 0
+            self.u.fee_extra = 0
+            self.u.token_encrypted = encrypt_token('a' * 32)
+            self.u.save()
+            Plan.objects.create(user=self.u, side='BUY', target_price=4, amount=500)
+            Quote.objects.create(price=4, previous_close=5, source='test', source_at=NOW)
+            evaluate_all(NOW)
+
+            with patch('core.push.send_http', side_effect=send), patch('core.push.timezone.now', return_value=NOW):
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(deliver)
+                    try:
+                        self.assertTrue(started.wait(5))
+                        trade = {'side':'BUY','quantity':100,'price':'4','fee':'1','occurred_at':NOW.isoformat()}
+                        self.assertTrue(post_entry(self.u, trade, 'parallel-with-push')[1])
+                    finally:
+                        ledger_written.set()
+                    future.result(timeout=10)
+
+        self.assertEqual(Delivery.objects.get().status, 'SENT')
+        self.assertEqual(Entry.objects.count(), 1)
