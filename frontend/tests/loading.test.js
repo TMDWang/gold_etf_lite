@@ -1,6 +1,11 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {createSectionLoader} from '../src/loading.js'
+import {createSectionLoader,networkNotice} from '../src/loading.js'
+test('repeated connection failures are combined without hiding other errors',()=>{
+ const states={market:{error:'网络连接暂时不可用，请检查网络后重试'},plans:{error:'连接超时，请检查网络后重试'},episodes:{error:'数据格式错误'}}
+ assert.deepEqual(networkNotice(states,['market','plans','episodes']),['market','plans'])
+ assert.deepEqual(networkNotice(states,['episodes']),[])
+})
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}}
 function section(load){return{state:{pending:false,error:''},load,values:[],apply(v){this.values.push(v)},clear(){this.values=[]}}}
 

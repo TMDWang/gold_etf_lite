@@ -1,3 +1,8 @@
+export function networkNotice(states,keys) {
+  const errors=new Set(['网络连接暂时不可用，请检查网络后重试','连接超时，请检查网络后重试'])
+  return keys.filter(key=>errors.has(states[key]?.error))
+}
+
 export function resolveEpisodePlan(episode,plans) {
   return plans.find(p=>p.id===episode.plan&&p.version===episode.version&&p.side===episode.side&&p.status==='ACTIVE')||null
 }

@@ -2,10 +2,10 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
-import {createSectionLoader,createSessionRequests,resolveEpisodePlan} from '../src/loading.js'
+import {createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice} from '../src/loading.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,applyPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
+function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,applyPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
