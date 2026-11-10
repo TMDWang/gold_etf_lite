@@ -7,6 +7,20 @@ def estimated_fee(user,gross):
     # Conservative round up for predictions; actual accounting uses the user's real fee.
     return (max(D(user.fee_minimum),gross*D(user.fee_rate))+D(user.fee_extra)).quantize(D('0.01'),rounding=ROUND_CEILING)
 
+def affordable_quantity(price, budget, fee_for, max_quantity=None):
+    low, high = 0, int(budget / price) // 100
+    if max_quantity is not None:
+        high = min(high, max_quantity // 100)
+    while low < high:
+        middle = (low + high + 1) // 2
+        gross = cash_round(price * middle * 100)
+        if gross + fee_for(gross) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    return low * 100
+
+
 def evaluate(plan,account,price,user,quote=None):
     result={'eligible':False,'reason':'等待有效行情','quantity':0,'price':str(price) if price else None,'net':None}
     if plan.side=='INFO':
@@ -31,14 +45,8 @@ def evaluate(plan,account,price,user,quote=None):
         result['reason']='请先在设置补齐券商费用参数';return result
     if plan.side=='BUY':
         limit=min(plan.amount,account.cash,max(D(0),account.budget-account.cost_basis))
-        hi=int(limit/price)//100
-        lo=0
-        while lo<hi:
-            mid=(lo+hi+1)//2
-            gross=price*(mid*100)
-            if gross+estimated_fee(user,gross)<=limit: lo=mid
-            else: hi=mid-1
-        q=lo*100;result['quantity']=q
+        q = affordable_quantity(price, limit, lambda gross: estimated_fee(user, gross))
+        result['quantity'] = q
         if q<100:
             result['reason']='现金、预算或含费金额不足 100 份';return result
         met=price<=plan.target_price if plan.direction=='BELOW' else price>=plan.target_price

@@ -1,3 +1,4 @@
+from collections import deque
 from decimal import Decimal as D, ROUND_HALF_UP
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -38,10 +39,20 @@ def effective_payloads(entries):
     replacements={e.corrects_id:e.payload for e in entries if e.kind=='CORRECTION'}
     return replacements
 
-def replay(account):
-    rows=list(Entry.objects.filter(user=account.user).order_by('id'))
+def sale_cost(shares, basis, quantity):
+    return basis if quantity == shares else (basis * quantity / shares).quantize(MICRO, rounding=ROUND_HALF_UP)
+
+
+def position_snapshot(shares, cash, basis):
+    return {'shares': shares, 'cash': str(cash), 'cost_basis': str(basis),
+            'unit_cost': str(basis / shares) if shares else None}
+
+
+def ledger_steps(account):
+    rows = list(Entry.objects.filter(user_id=account.user_id).order_by('id'))
     replacements=effective_payloads(rows)
     cash, shares, basis, realized=account.initial_cash,account.initial_shares,account.initial_cost,D('0')
+    yield None, None, cash, shares, basis, realized
     # Recording order is explicit; a correction replaces its target at its original position.
     for row in rows:
         if row.kind=='CORRECTION':
@@ -58,12 +69,36 @@ def replay(account):
                     raise BusinessError(f'第 {row.pk} 笔卖出超过当时持仓，已回滚；请核对流水顺序')
                 if q%100 and q != shares:
                     raise BusinessError('不足一手的余份须一次全部卖出')
-                transferred=basis if q==shares else (basis*q/shares).quantize(MICRO,rounding=ROUND_HALF_UP)
+                transferred=sale_cost(shares,basis,q)
                 basis-=transferred; shares-=q; cash+=gross-fee; realized+=gross-fee-transferred
         if cash<0:
             raise BusinessError(f'第 {row.pk} 笔之后现金不足，已回滚；请先补齐遗漏的资金流水')
         if cash>D('999999999999999999') or basis>D('999999999999999999'):
             raise BusinessError('金额超出本版可记录范围')
+        yield row, d, cash, shares, basis, realized
+
+
+def holding_history(account):
+    points = deque(maxlen=120)
+    count = 0
+    for row, payload, cash, shares, basis, _ in ledger_steps(account):
+        if row and row.kind != 'TRADE':
+            continue
+        points.append({
+            'id': row.pk if row else None,
+            'at': (payload.get('occurred_at') or row.created_at) if row else account.initialized_at,
+            'side': payload['side'] if row else 'INITIAL',
+            'quantity': int(payload['quantity']) if row else shares,
+            'price': payload['price'] if row else None,
+            **position_snapshot(shares, cash, basis),
+        })
+        count += 1
+    return {'points': list(points), 'truncated': count > len(points)}
+
+
+def replay(account):
+    for _, _, cash, shares, basis, realized in ledger_steps(account):
+        pass
     account.cash=cash; account.shares=shares; account.cost_basis=basis; account.realized=realized
     account.save(update_fields=['cash','shares','cost_basis','realized'])
 

@@ -9,14 +9,18 @@ import { api as rawApi, post as rawPost } from './api'
 import { money, signed, tradePreview, beijingInput, backupSummary, formatRelease } from './display'
 
 const PriceChart=defineAsyncComponent(()=>import('./components/PriceChart.vue'))
+const HoldingCostChart=defineAsyncComponent(()=>import('./components/HoldingCostChart.vue'))
 const frontendVersion=typeof __FRONTEND_VERSION__==='string'?__FRONTEND_VERSION__:'开发模式'
 const loading=ref(true), startupError=ref(''), busy=ref(false), me=ref(null), account=ref(null), market=ref({points:[]}), plans=ref([]), episodes=ref([]), entries=ref([]), deliveries=ref([]), updateAvailable=ref(false)
+const holdingHistory=ref({points:[]}), historyShown=ref(false)
 const alerts=ref([]), publicAlerts=ref([]), publicRules=ref([])
 const tab=ref('home'), popup=ref(''), authMode=ref('login'), entryPage=ref(1), entryCount=ref(0), admins=ref([]), system=ref(null), invite=ref(''), authError=ref('')
 const credentials=reactive({username:'',password:'',code:''}), init=reactive({budget:'',cash:'',shares:'0',unit_cost:'0'}), settings=reactive({fee_rate:'',fee_minimum:'',fee_extra:'',reminder_minutes:30,reminder_max:3,push_token:''})
 const groupSettings=reactive({topic:'',token:'',token_bound:false})
 const form=reactive({}), entryKey=ref(''), cashForm=reactive({amount:'',reason:''}), passwords=reactive({old_password:'',new_password:''})
-const buyPreviewForm=reactive({price:'',quantity:'100',fee:''}), buyPreviewResult=ref(null)
+const previewForm=reactive({price:'',quantity:'100',fee:'',mode:'quantity',budget:''}), previewResult=ref(null)
+const previewIsSell=computed(()=>popup.value==='sell-preview')
+const previewTitle=computed(()=>previewIsSell.value?'卖出预览':'买入预览')
 let previewRevision=0
 let timer
 let streamNeedsMarket=false
@@ -24,9 +28,9 @@ let shellWorker,quoteStream,latestPriceEvent=null,bootstrapVersion=0
 const requests=createSessionRequests({request:rawApi,submit:rawPost})
 const api=(...args)=>requests.request(...args)
 const post=(...args)=>requests.submit(...args)
-const sectionState=reactive(Object.fromEntries(['account','market','quote','plans','episodes','entries','alerts','publicAlerts'].map(k=>[k,{pending:false,error:''}])))
+const sectionState=reactive(Object.fromEntries(['account','market','quote','plans','episodes','entries','history','alerts','publicAlerts'].map(k=>[k,{pending:false,error:''}])))
 const streamState=ref('stopped')
-const networkKeys=computed(()=>networkNotice(sectionState,tab.value==='holdings'?['account','entries']:tab.value==='alerts'?['account','alerts','publicAlerts']:tab.value==='plans'?['account','plans']:['account','market','quote','plans','episodes']))
+const networkKeys=computed(()=>networkNotice(sectionState,tab.value==='holdings'?(historyShown.value?['account','entries','history']:['account','entries']):tab.value==='alerts'?['account','alerts','publicAlerts']:tab.value==='plans'?['account','plans']:['account','market','quote','plans','episodes']))
 function displayState(key){const state=sectionState[key];return networkKeys.value.includes(key)?{...state,error:''}:state}
 function retryNetwork(){for(const key of networkKeys.value)void loader.run(key,{force:true})}
 const sections={
@@ -36,12 +40,14 @@ const sections={
   plans:{state:sectionState.plans,load:opts=>api('/plans/',opts),apply:v=>{plans.value=v},clear:()=>{plans.value=[]}},
   episodes:{state:sectionState.episodes,load:opts=>api('/episodes/',opts),apply:v=>{episodes.value=v},clear:()=>{episodes.value=[]}},
   entries:{state:sectionState.entries,load:opts=>api(`/entries/?page=${entryPage.value}`,opts),apply:v=>{entries.value=v.results;entryCount.value=v.count},clear:()=>{entries.value=[];entryCount.value=0}},
+  history:{state:sectionState.history,load:opts=>api('/account/holding-history/',opts),apply:value=>{holdingHistory.value=value},clear:()=>{holdingHistory.value={points:[]};historyShown.value=false}},
   alerts:{state:sectionState.alerts,load:opts=>api('/alerts/',opts),apply:v=>{alerts.value=v},clear:()=>{alerts.value=[]}},
   publicAlerts:{state:sectionState.publicAlerts,load:opts=>api('/public-alerts/',opts),apply:v=>{publicAlerts.value=v},clear:()=>{publicAlerts.value=[]}},
 }
 const loader=createSectionLoader({sections,onUnauthorized(){requests.invalidate();me.value=null;clearPrivateForms();showToast('登录已过期或账号已停用，请重新登录')}})
-function clearPrivateForms(){closeDialog();popup.value='';deliveries.value=[];admins.value=[];publicRules.value=[];Object.assign(groupSettings,{topic:'',token:'',token_bound:false});system.value=null;invite.value='';Object.keys(form).forEach(k=>delete form[k]);Object.assign(settings,{fee_rate:'',fee_minimum:'',fee_extra:'',reminder_minutes:30,reminder_max:3,push_token:'',token_bound:false});Object.assign(init,{budget:'',cash:'',shares:'0',unit_cost:'0'});Object.assign(buyPreviewForm,{price:'',quantity:'100',fee:''});buyPreviewResult.value=null;previewRevision++;cashForm.amount='';cashForm.reason='';passwords.old_password='';passwords.new_password='';credentials.password='';entryPage.value=1;tab.value='home'}
+function clearPrivateForms(){closeDialog();popup.value='';deliveries.value=[];admins.value=[];publicRules.value=[];Object.assign(groupSettings,{topic:'',token:'',token_bound:false});system.value=null;invite.value='';Object.keys(form).forEach(k=>delete form[k]);Object.assign(settings,{fee_rate:'',fee_minimum:'',fee_extra:'',reminder_minutes:30,reminder_max:3,push_token:'',token_bound:false});Object.assign(init,{budget:'',cash:'',shares:'0',unit_cost:'0'});Object.assign(previewForm,{price:'',quantity:'100',fee:'',mode:'quantity',budget:''});previewResult.value=null;previewRevision++;cashForm.amount='';cashForm.reason='';passwords.old_password='';passwords.new_password='';credentials.password='';entryPage.value=1;tab.value='home'}
 function resetPrivate(){quoteStream?.stop();requests.invalidate();loader.reset();clearPrivateForms()}
+const effectiveEntries=computed(()=>entries.value.map(entry=>({...entry,original_payload:entry.payload,payload:entry.effective_payload||entry.payload})))
 const activePlans=computed(()=>plans.value.filter(p=>p.status==='ACTIVE'))
 const price=computed(()=>{const a=account.value?.reference_quote,m=market.value.quote;if(!m)return a?.price;if(!a)return m.price;return Date.parse(m.source_at)>=Date.parse(a.source_at)?m.price:a.price})
 const holdingValue=computed(()=>price.value!=null&&account.value?Number(price.value)*Number(account.value.shares):account.value?.market_value)
@@ -99,7 +105,7 @@ async function action(fn) { if(busy.value)return;busy.value=true;try{await fn()}
 function refresh({force=false}={}) {
   if (!me.value) return
   if(force)loader.invalidate()
-  const keys=tab.value==='holdings'?['account','entries']:tab.value==='alerts'?['account','alerts','publicAlerts']:tab.value==='plans'?['account','plans']:['account','market','plans','episodes']
+  const keys=tab.value==='holdings'?(historyShown.value?['account','entries','history']:['account','entries']):tab.value==='alerts'?['account','alerts','publicAlerts']:tab.value==='plans'?['account','plans']:['account','market','plans','episodes']
   const ages={account:15000,market:20000,episodes:20000,plans:60000,entries:60000,alerts:60000,publicAlerts:60000}
   for(const key of keys)void loader.run(key,{force,maxAgeMs:ages[key]})
 }
@@ -115,8 +121,41 @@ function openTrade(side='BUY',p=null,correction=null){if(!initialized.value){sho
 function localInput(v){return beijingInput(v)}
 function estimateFee(){if(settings.fee_rate===''||settings.fee_minimum===''||settings.fee_extra===''){showToast('请先在设置填写券商费用参数');return}form.fee=(Math.max(Number(settings.fee_minimum),Number(form.price)*Number(form.quantity)*Number(settings.fee_rate))+Number(settings.fee_extra)).toFixed(2)}
 async function saveTrade(){await action(async()=>{await showConfirmDialog({title:form.correction?'确认纠错并重算？':'确认实际成交',message:`${tradePreview(form)}\n请以券商成交记录为准。`});const t={side:form.side,quantity:form.quantity,price:form.price,fee:form.fee,occurred_at:`${form.occurred_at}+08:00`};if(form.plan_id){t.plan_id=form.plan_id;t.plan_version=form.plan_version}if(form.correction)await post(`/entries/${form.correction}/correct/`,{reason:form.reason,replacement:t},entryKey.value);else await post('/entries/',t,entryKey.value);popup.value='';await refresh({force:true});showSuccessToast('已入账')})}
-function openBuyPreview(){Object.assign(buyPreviewForm,{price:price.value||'',quantity:'100',fee:''});buyPreviewResult.value=null;popup.value='buy-preview'}
-async function calculateBuyPreview(){await action(async()=>{const revision=previewRevision;const body={price:buyPreviewForm.price,quantity:buyPreviewForm.quantity};if(buyPreviewForm.fee!=='')body.fee=buyPreviewForm.fee;let result;try{result=await post('/account/buy-preview/',body)}catch(e){if(e.message?.includes('可能已保存'))throw new Error('连接中断，预览未完成，请重试');throw e}if(revision===previewRevision&&popup.value==='buy-preview')buyPreviewResult.value=result})}
+function openTradePreview(side){
+  const sell=side==='SELL'
+  if(sell && !account.value?.shares)return
+  previewRevision++
+  Object.assign(previewForm,{price:price.value||'',quantity:sell?String(Math.min(100,account.value.shares)):'100',fee:'',mode:'quantity',budget:''})
+  previewResult.value=null
+  popup.value=sell?'sell-preview':'buy-preview'
+}
+async function calculatePreview(){
+  await action(async()=>{
+    const revision=previewRevision
+    const owner=popup.value
+    const body={price:previewForm.price}
+    if(!previewIsSell.value && previewForm.mode==='budget')body.budget=previewForm.budget
+    else body.quantity=previewForm.quantity
+    if(previewForm.fee!=='')body.fee=previewForm.fee
+    try {
+      const result=await post(`/account/${previewIsSell.value?'sell':'buy'}-preview/`,body)
+      if(revision===previewRevision && popup.value===owner)previewResult.value=result
+    } catch(e) {
+      if(e.message?.includes('可能已保存'))throw new Error('连接中断，预览未完成，请重试')
+      throw e
+    }
+  })
+}
+function usePreview(){
+  if(!previewResult.value || previewResult.value.cash_sufficient===false)return
+  const values={quantity:String(previewResult.value.quantity),price:previewForm.price,fee:previewResult.value.fee}
+  openTrade(previewIsSell.value?'SELL':'BUY')
+  Object.assign(form,values)
+}
+function toggleHoldingHistory(){
+  historyShown.value=!historyShown.value
+  if(historyShown.value)void loader.run('history',{force:true})
+}
 function openCash(){cashForm.amount='';cashForm.reason='';entryKey.value=crypto.randomUUID();popup.value='cash'}
 async function saveCash(){await action(async()=>{await post('/cash/',cashForm,entryKey.value);popup.value='';await refresh({force:true});showSuccessToast('资金变动已记录')})}
 async function ignore(e){await action(async()=>{await post(`/episodes/${e.id}/ignore/`,{});await refresh({force:true});showToast('本轮提醒已停止，计划继续保留')})}
@@ -151,7 +190,7 @@ const safeToUpdate=computed(()=>{
   return updateAvailable.value&&!loading.value&&!busy.value&&!popup.value&&!loginDirty&&!setupDirty
 })
 watch(safeToUpdate,ready=>{if(ready)applyUpdate()})
-watch(()=>[buyPreviewForm.price,buyPreviewForm.quantity,buyPreviewForm.fee,account.value?.cash,account.value?.shares,account.value?.cost_basis],()=>{previewRevision++;buyPreviewResult.value=null},{flush:'sync'})
+watch(()=>[previewForm.price,previewForm.quantity,previewForm.fee,previewForm.mode,previewForm.budget,account.value?.cash,account.value?.shares,account.value?.cost_basis],()=>{previewRevision++;previewResult.value=null},{flush:'sync'})
 watch(tab,()=>refresh({force:true}))
 watch(me,user=>{if(!quoteStream)return;if(!user)quoteStream.stop();else if(document.visibilityState==='visible')quoteStream.start()})
 onMounted(()=>{shellWorker=registerShellWorker(()=>{updateAvailable.value=true},undefined,undefined,()=>safeToUpdate.value);quoteStream=createPriceStream({onPrice:acceptStreamPrice,onState:value=>{streamState.value=value},onFallback:()=>{void loader.run('quote',{force:true})},onOpen:()=>{streamNeedsMarket=true}});void bootstrap();timer=setInterval(()=>{if(document.visibilityState==='visible')shellWorker?.check()},30000);document.addEventListener('visibilitychange',onVisible);window.addEventListener('online',onOnline)})
@@ -197,14 +236,22 @@ onBeforeUnmount(()=>{bootstrapVersion++;quoteStream?.stop();loader.reset();shell
           <section class="card next-card"><SectionStatus :state="displayState('plans')" label="计划" @retry="loader.run('plans',{force:true})"/><div class="row"><h2>接下来的一笔</h2><button class="text-button" @click="tab='plans'">管理计划 →</button></div><p v-if="!activePlans.length && !sectionState.plans.pending && !sectionState.plans.error" class="muted">先写下自己关心的价格，剩下交给提醒。</p><div v-for="p in activePlans" :key="p.id" class="mini-plan"><span class="side-badge" :class="p.side==='SELL'?'sell':''">{{p.side==='BUY'?'买':'卖'}}</span><div><strong>{{p.side==='BUY'?(p.direction==='BELOW'?'跌到':'涨到'):'涨到'}} {{p.target_price||'收益目标'}}</strong><p>{{p.side==='BUY'?`含费上限 ¥${money(p.amount)}`:p.sell_all?'卖出全部持仓':`卖出 ${p.quantity} 份`}}</p></div><span class="tiny">监测中</span></div></section>
           <p class="version-info" aria-label="当前版本">前端 {{frontendVersion==='开发模式'?frontendVersion:formatRelease(frontendVersion)}} · 后端 {{formatRelease(market.backend_version)}}<span v-if="sectionState.market.error">（上次获取）</span></p>
         </template>
-        <template v-if="tab==='holdings' && initialized"><div class="page-heading"><div><p class="eyebrow">你的黄金账本</p><h1>我的持仓</h1></div><van-button size="small" round plain @click="openBuyPreview">买入预览</van-button></div>
+        <template v-if="tab==='holdings' && initialized"><div class="page-heading"><div><p class="eyebrow">你的黄金账本</p><h1>我的持仓</h1></div><div class="holding-preview-actions"><van-button size="small" round plain @click="openTradePreview('BUY')">买入预览</van-button><van-button size="small" round plain :disabled="!account.shares" @click="openTradePreview('SELL')">卖出预览</van-button></div></div>
           <section class="card account-card"><SectionStatus :state="displayState('account')" label="账户" @retry="loader.run('account',{force:true})"/><div class="row"><h2>持仓概览</h2><span class="tiny">截至当前记录</span></div><div class="holding-main"><div><span class="muted">持有份额</span><strong>{{account.shares.toLocaleString()}}<small>份</small></strong></div><div><span class="muted">每份成本</span><strong>{{account.unit_cost==null?'—':Number(account.unit_cost).toFixed(4)}}<small>元</small></strong></div></div><div class="metrics"><div><span>可用现金</span><strong>¥{{money(account.cash)}}</strong></div><div><span>持仓市值</span><strong>¥{{money(holdingValue)}}</strong></div><div><span>当前浮盈亏</span><strong  :class="pnlClass(holdingFloating)">{{signed(holdingFloating)}}</strong></div><div><span>已记录累计净收益</span><strong :class="pnlClass(holdingTotal)">{{signed(holdingTotal)}}</strong></div></div><p class="hint">浮盈亏未扣未来卖出费用。收益自 {{fmtTime(account.initialized_at)}} 期初录入起算，不包含未录入的历史已卖出收益。行情过期时资产为最后行情估值。</p></section>
+          <section class="card">
+            <div class="row"><h2>持仓成本走势</h2><button class="text-button" :aria-expanded="historyShown" @click="toggleHoldingHistory">{{historyShown?'收起':'查看'}}</button></div>
+            <template v-if="historyShown">
+              <SectionStatus :state="displayState('history')" label="持仓走势" @retry="loader.run('history',{force:true})"/>
+              <HoldingCostChart v-if="holdingHistory.points.length" :points="holdingHistory.points"/>
+              <p v-if="holdingHistory.truncated" class="hint">显示最近 120 个记账时点。</p>
+            </template>
+          </section>
         </template>
         <template v-if="tab==='plans' && initialized"><SectionStatus :state="displayState('plans')" label="计划" @retry="loader.run('plans',{force:true})"/><SectionStatus :state="displayState('account')" label="账户" @retry="loader.run('account',{force:true})"/><div class="page-heading"><div><p class="eyebrow">把想法写下来</p><h1>购买计划</h1></div></div><section class="card budget-card"><div><span class="muted">计划预算</span><strong>¥{{money(account.budget)}}</strong></div><button class="text-button" @click="budget">修改</button><p class="hint">现金 ¥{{money(account.cash)}} · 当前成本占用 ¥{{money(account.cost_basis)}}<br>预算剩余额度按预算减持仓成本估算，不代表现金。</p></section>
           <section v-for="side in ['BUY','SELL']" :key="side" class="card plan-card"><div class="row"><h2>{{side==='BUY'?'下一笔买入':'下一笔卖出'}}</h2><span class="side-badge" :class="side==='SELL'?'sell':''">{{side==='BUY'?'买':'卖'}}</span></div><template v-if="activePlans.find(p=>p.side===side)"><template v-for="p in activePlans.filter(p=>p.side===side)" :key="p.id"><div class="plan-target"><small>{{side==='BUY'?(p.direction==='BELOW'?'价格跌到或低于':'价格涨到或高于'):'目标价 / 本笔目标净收益率'}}</small><strong>{{p.target_price?`¥${p.target_price}`:'—'}}<span v-if="side==='SELL'&&p.target_profit!=null"> / {{p.target_profit}}%</span></strong></div><p class="muted">{{side==='BUY'?`含费金额上限 ¥${money(p.amount)}`:p.sell_all?'全部持仓':`${p.quantity} 份`}}</p><p class="hint">{{p.evaluation?.reason}}<template v-if="p.evaluation?.quantity"> · 参考 {{p.evaluation.quantity}} 份</template></p><div class="button-row"><van-button size="small" round type="primary" @click="openTrade(side,p)">已实际成交</van-button><van-button size="small" round plain @click="openPlan(side,p)">编辑</van-button><button class="text-button muted" @click="cancelPlan(p)">取消计划</button></div></template></template><template v-else-if="!sectionState.plans.pending && !sectionState.plans.error"><p class="empty-text">{{side==='BUY'?'安排下一笔，按自己的节奏积累。':'设置你愿意卖出的价格或净收益。'}}</p><van-button round block plain @click="openPlan(side)">＋ {{side==='BUY'?'添加买入计划':'添加卖出计划'}}</van-button></template><p class="hint">{{side==='BUY'?'计划跨天保留；不会自动下单。':'目标价与净收益率任一满足，且预计扣费后不亏损，才提醒。'}}</p></section>
         </template>
         <template v-if="tab==='alerts' && initialized"><div class="page-heading"><div><p class="eyebrow">按自己的关注设置</p><h1>行情提醒</h1></div><button class="text-button" @click="openAlert()">＋ 添加</button></div><SectionStatus :state="displayState('alerts')" label="行情提醒" @retry="loader.run('alerts',{force:true})"/><section class="card"><p class="hint">仅观察 518880 行情，不构成买卖建议，也不会自动交易。交易时段使用有效行情检查；个人通知需在设置绑定自己的 PushPlus；公共群通知需加入对应的 PushPlus 群组。相对持仓成本不包含未来交易费用。</p><van-button round block plain @click="openAlert()">＋ 添加行情提醒</van-button></section><SectionStatus :state="displayState('publicAlerts')" label="公共提醒" @retry="loader.run('publicAlerts',{force:true})"/><section v-if="publicAlerts.length" class="card"><h2>公共行情提醒</h2><p class="hint">管理员统一设置，发送至 PushPlus 群组。加入、退出或关闭群消息请在 PushPlus 操作；公共内容不包含个人持仓。</p><div v-for="a in publicAlerts" :key="a.id" class="entry-row"><strong>{{a.label||'公共行情提醒'}}</strong><p>{{a.kind==='PRICE'?'价格':'相对昨收涨跌幅'}} {{a.direction==='ABOVE'?'达到或高于':'达到或低于'}} {{a.threshold}}{{a.kind==='PRICE'?' 元':'%'}}</p><p class="hint">每 {{a.interval}} 分钟，单轮最多 {{a.repeat_max}} 次</p></div></section><h2 v-if="alerts.length">我的个人提醒</h2><section v-for="a in alerts" :key="a.id" class="card"><div class="row"><h2>{{a.label||'行情提醒'}}</h2><span class="status-pill">{{a.enabled?'监测中':'已暂停'}}</span></div><p>{{a.kind==='PRICE'?'价格':a.kind==='PCT_CLOSE'?'相对昨收涨跌幅':'相对持仓成本涨跌幅'}} {{a.direction==='ABOVE'?'达到或高于':'达到或低于'}} {{a.threshold}}{{a.kind==='PRICE'?' 元':'%'}}</p><p class="hint">每 {{a.interval}} 分钟，单轮最多 {{a.repeat_max}} 次<span v-if="a.episode"> · {{a.episode.status==='UNKNOWN'?'推送结果未确认':a.episode.status==='OPEN'?'条件已达到':a.episode.status==='IGNORED'?'本轮已停止':'等待下一轮'}}</span></p><div class="button-row"><van-button size="small" round plain @click="openAlert(a)">编辑</van-button><van-button size="small" round plain @click="toggleAlert(a)">{{a.enabled?'暂停':'启用'}}</van-button><van-button v-if="a.episode && ['OPEN','UNKNOWN'].includes(a.episode.status)" size="small" round plain @click="ignoreAlert(a)">停止本轮</van-button><button class="text-button" @click="deleteAlert(a)">删除</button></div></section></template>
-        <template v-if="tab==='holdings' && initialized"><SectionStatus :state="displayState('entries')" label="记录" @retry="loader.run('entries',{force:true})"/><SectionStatus :state="displayState('account')" label="账户" @retry="loader.run('account',{force:true})"/><div class="page-heading"><div><p class="eyebrow">每一笔，都有来处</p><h2>交易记录</h2></div><button class="text-button" @click="openCash">资金变动</button></div><div class="button-row history-actions"><van-button round type="primary" @click="openTrade('BUY')">记一笔买入</van-button><van-button round plain @click="openTrade('SELL')">记一笔卖出</van-button></div><section class="card"><div class="row"><h2>已记录卖出净收益</h2><strong :class="pnlClass(account.realized)">{{signed(account.realized)}}</strong></div><p class="hint">按记账顺序计算移动平均成本；成交时间是记录信息。补录更早交易请核对顺序。纠错保留原记录并重算。</p></section><section class="card entries"><div v-for="e in entries" :key="e.id" class="entry-row"><div class="row"><div class="entry-title"><span class="side-badge" :class="e.payload.side==='SELL'?'sell':''">{{e.kind==='TRADE'?(e.payload.side==='BUY'?'买':'卖'):e.kind==='CASH'?'资':'改'}}</span><strong>{{e.kind==='TRADE'?(e.payload.side==='BUY'?'买入':'卖出')+' 518880':e.kind==='CASH'?'资金变动':'账目纠错'}}</strong></div><strong>{{e.kind==='TRADE'?`${e.payload.quantity} 份`:e.kind==='CASH'?signed(e.payload.amount):`#${e.corrects}`}}</strong></div><p v-if="e.kind==='TRADE'">成交价 ¥{{e.payload.price}} · 手续费 ¥{{money(e.payload.fee)}}</p><p v-if="e.reason">{{e.reason}}</p><div class="row"><span class="tiny">{{fmtTime(e.payload.occurred_at||e.created_at)}}<template v-if="e.corrected"> · 已有纠错</template></span><button v-if="e.kind==='TRADE'" class="text-button" @click="openTrade(e.payload.side,null,{...e,payload:e.effective_payload||e.payload})">纠错</button><button v-if="e.kind==='CASH'" class="text-button" @click="openCash">以反向流水修正</button></div></div><van-empty v-if="!entries.length && !sectionState.entries.pending && !sectionState.entries.error" description="还没有成交记录" :image-size="70"/><van-pagination v-if="entryCount>20" :model-value="entryPage" :total-items="entryCount" :items-per-page="20" mode="simple" @change="changePage"/></section><section class="card initial-card"><h2>期初快照</h2><p class="muted">现金 ¥{{money(account.initial_cash)}} · {{account.initial_shares}} 份<br>初始持仓成本 ¥{{money(account.initial_cost)}}</p><p class="tiny">{{fmtTime(account.initialized_at)}} 建立，不作为历史成交。</p></section></template>
+        <template v-if="tab==='holdings' && initialized"><SectionStatus :state="displayState('entries')" label="记录" @retry="loader.run('entries',{force:true})"/><SectionStatus :state="displayState('account')" label="账户" @retry="loader.run('account',{force:true})"/><div class="page-heading"><div><p class="eyebrow">每一笔，都有来处</p><h2>交易记录</h2></div><button class="text-button" @click="openCash">资金变动</button></div><div class="button-row history-actions"><van-button round type="primary" @click="openTrade('BUY')">记一笔买入</van-button><van-button round plain @click="openTrade('SELL')">记一笔卖出</van-button></div><section class="card"><div class="row"><h2>已记录卖出净收益</h2><strong :class="pnlClass(account.realized)">{{signed(account.realized)}}</strong></div><p class="hint">按记账顺序计算移动平均成本；成交时间是记录信息。补录更早交易请核对顺序。纠错保留原记录并重算。</p></section><section class="card entries"><div v-for="e in effectiveEntries" :key="e.id" class="entry-row"><div class="row"><div class="entry-title"><span class="side-badge" :class="e.payload.side==='SELL'?'sell':''">{{e.kind==='TRADE'?(e.payload.side==='BUY'?'买':'卖'):e.kind==='CASH'?'资':'改'}}</span><strong>{{e.kind==='TRADE'?(e.payload.side==='BUY'?'买入':'卖出')+' 518880':e.kind==='CASH'?'资金变动':'账目纠错'}}</strong></div><strong>{{e.kind==='TRADE'?`${e.payload.quantity} 份`:e.kind==='CASH'?signed(e.payload.amount):`#${e.corrects}`}}</strong></div><p v-if="e.kind==='TRADE'">成交价 ¥{{e.payload.price}} · 手续费 ¥{{money(e.payload.fee)}}</p><p v-if="e.corrected">原记录：{{e.original_payload.side==='BUY'?'买入':'卖出'}} {{e.original_payload.quantity}} 份 · ¥{{e.original_payload.price}} · 手续费 ¥{{money(e.original_payload.fee)}}</p><p v-if="e.reason">{{e.reason}}</p><div class="row"><span class="tiny">{{fmtTime(e.payload.occurred_at||e.created_at)}}<template v-if="e.corrected"> · 已有纠错</template></span><button v-if="e.kind==='TRADE'" class="text-button" @click="openTrade(e.payload.side,null,{...e,payload:e.effective_payload||e.payload})">纠错</button><button v-if="e.kind==='CASH'" class="text-button" @click="openCash">以反向流水修正</button></div></div><van-empty v-if="!entries.length && !sectionState.entries.pending && !sectionState.entries.error" description="还没有成交记录" :image-size="70"/><van-pagination v-if="entryCount>20" :model-value="entryPage" :total-items="entryCount" :items-per-page="20" mode="simple" @change="changePage"/></section><section class="card initial-card"><h2>期初快照</h2><p class="muted">现金 ¥{{money(account.initial_cash)}} · {{account.initial_shares}} 份<br>初始持仓成本 ¥{{money(account.initial_cost)}}</p><p class="tiny">{{fmtTime(account.initialized_at)}} 建立，不作为历史成交。</p></section></template>
       </template>
       <footer class="page-footer">按自己的计划，慢慢来。<br><span>仅做提醒与记账，实际交易以券商记录为准。</span></footer>
     </main>
@@ -219,7 +266,40 @@ onBeforeUnmount(()=>{bootstrapVersion++;quoteStream?.stop();loader.reset();shell
   </div>
 
   <van-popup :show="!!popup" position="bottom" round closeable :close-on-click-overlay="!busy" @update:show="v=>{if(!v&&!busy)popup=''}" class="form-popup" safe-area-inset-bottom>
-    <template v-if="popup==='buy-preview'"><h2>买入预览</h2><p class="hint">模拟买入后的持仓与现金变化，不会下单或记账。默认参考价来自最近行情，请自行核对。</p><van-form @submit="calculateBuyPreview"><van-field v-model="buyPreviewForm.price" label="预计买入价 / 元" type="number" placeholder="最多三位小数" required/><van-field v-model="buyPreviewForm.quantity" label="预计买入份额" type="digit" placeholder="100 的整数倍" required/><van-field v-model="buyPreviewForm.fee" label="预计手续费 / 元" type="number" placeholder="留空按个人设置估算"/><p class="hint">手续费可手动填写；留空时按个人设置估算。实际费用以券商为准。</p><van-button block round type="primary" native-type="submit" :loading="busy">计算买入后变化</van-button></van-form><div v-if="buyPreviewResult" class="preview buy-preview-result" aria-live="polite"><div class="row"><strong>预计买入 ¥{{money(buyPreviewResult.gross)}}</strong><span>手续费 ¥{{money(buyPreviewResult.fee)}}{{buyPreviewResult.fee_estimated?'（估算）':''}}</span></div><p v-if="!buyPreviewResult.cash_sufficient" class="danger">当前可用现金不足；负数为模拟结果，不能按现有账本直接入账。</p><table><thead><tr><th>项目</th><th>买入前</th><th>买入后</th></tr></thead><tbody><tr><th>持有份额</th><td>{{buyPreviewResult.before.shares}}</td><td>{{buyPreviewResult.after.shares}}</td></tr><tr><th>持仓成本</th><td>¥{{money(buyPreviewResult.before.cost_basis)}}</td><td>¥{{money(buyPreviewResult.after.cost_basis)}}</td></tr><tr><th>每份成本</th><td>{{buyPreviewResult.before.unit_cost==null?'—':Number(buyPreviewResult.before.unit_cost).toFixed(4)}}</td><td>{{Number(buyPreviewResult.after.unit_cost).toFixed(4)}}</td></tr><tr><th>可用现金</th><td>¥{{money(buyPreviewResult.before.cash)}}</td><td>¥{{money(buyPreviewResult.after.cash)}}</td></tr></tbody></table><p class="hint">成本包含本次预计手续费；这里只是模拟，不会修改账本。</p></div></template>
+    <template v-if="popup==='buy-preview' || popup==='sell-preview'">
+      <h2>{{previewTitle}}</h2>
+      <p class="hint">按输入的价格和份额估算成交结果。默认参考价取最近行情，请自行核对。</p>
+      <van-form @submit="calculatePreview">
+        <van-field v-model="previewForm.price" label="预计成交价 / 元" type="number" placeholder="最多三位小数" required/>
+        <van-field v-if="!previewIsSell" label="试算方式">
+          <template #input><van-radio-group v-model="previewForm.mode" direction="horizontal"><van-radio name="quantity">按份额</van-radio><van-radio name="budget">按预算</van-radio></van-radio-group></template>
+        </van-field>
+        <van-field v-if="!previewIsSell && previewForm.mode==='budget'" v-model="previewForm.budget" label="含费预算 / 元" type="number" required/>
+        <van-field v-else v-model="previewForm.quantity" label="预计份额" type="digit" :placeholder="previewIsSell?'整手或全部持仓':'100 的整数倍'" required>
+          <template v-if="previewIsSell" #button><button type="button" class="text-button" @click="previewForm.quantity=String(account.shares)">全部份额</button></template>
+        </van-field>
+        <van-field v-model="previewForm.fee" label="预计手续费 / 元" type="number" placeholder="留空按个人设置估算"/>
+        <p class="hint">手续费可手动填写，实际费用以券商为准。</p>
+        <van-button block round type="primary" native-type="submit" :loading="busy">计算{{previewIsSell?'卖出':'买入'}}后变化</van-button>
+      </van-form>
+      <div v-if="previewResult" class="preview buy-preview-result" aria-live="polite">
+        <div class="row"><strong>{{previewIsSell?'预计净到账':'预计总支出'}} ¥{{money(previewIsSell?previewResult.net:previewResult.total)}}</strong><span>手续费 ¥{{money(previewResult.fee)}}{{previewResult.fee_estimated?'（估算）':''}}</span></div>
+        <p v-if="!previewIsSell">预计买入 {{previewResult.quantity}} 份</p>
+        <p v-if="previewIsSell" :class="pnlClass(previewResult.realized)">本笔预计净盈亏 {{signed(previewResult.realized)}} 元<span v-if="previewResult.return_pct!=null"> · {{signed(previewResult.return_pct)}}%</span></p>
+        <p v-if="previewResult.cash_sufficient===false" class="danger">当前可用现金不足，无法按这个预览结果入账。</p>
+        <table>
+          <thead><tr><th>项目</th><th>成交前</th><th>成交后</th></tr></thead>
+          <tbody>
+            <tr><th>持有份额</th><td>{{previewResult.before.shares}}</td><td>{{previewResult.after.shares}}</td></tr>
+            <tr><th>持仓成本</th><td>¥{{money(previewResult.before.cost_basis)}}</td><td>¥{{money(previewResult.after.cost_basis)}}</td></tr>
+            <tr><th>每份成本</th><td>{{previewResult.before.unit_cost==null?'—':Number(previewResult.before.unit_cost).toFixed(4)}}</td><td>{{previewResult.after.unit_cost==null?'—':Number(previewResult.after.unit_cost).toFixed(4)}}</td></tr>
+            <tr><th>可用现金</th><td>¥{{money(previewResult.before.cash)}}</td><td>¥{{money(previewResult.after.cash)}}</td></tr>
+          </tbody>
+        </table>
+        <van-button v-if="previewResult.cash_sufficient!==false" block round plain @click="usePreview">带入成交表单</van-button>
+        <p class="hint">请按券商实际成交核对价格、份额和手续费，再确认入账。</p>
+      </div>
+    </template>
     <template v-if="popup==='alert' || popup==='public-rule'"><h2>{{form.id?'编辑':'添加'}}{{popup==='public-rule'?'公共':'个人'}}行情提醒</h2><van-form @submit="popup==='public-rule'?savePublicRule():saveAlert()"><van-field label="提醒类型"><template #input><van-radio-group v-model="form.kind"><van-radio name="PRICE">目标价格</van-radio><van-radio name="PCT_CLOSE">相对昨收涨跌幅</van-radio><van-radio v-if="popup!=='public-rule'" name="PCT_COST">相对持仓成本涨跌幅</van-radio></van-radio-group></template></van-field><van-field label="触发条件"><template #input><van-radio-group v-model="form.direction" direction="horizontal"><van-radio name="ABOVE">达到或高于</van-radio><van-radio name="BELOW">达到或低于</van-radio></van-radio-group></template></van-field><van-field v-model="form.threshold" label="目标数值" type="text" inputmode="decimal" :placeholder="form.kind==='PRICE'?'例如 4.500 元':'例如 5 或 -3，单位 %'" required/><p class="hint">涨跌幅上涨填正数，下跌填负数，例如 -3 表示下跌 3%。持仓成本基准需要先记录有效持仓成本。</p><van-field v-model="form.label" label="备注（可选）" maxlength="80"/><van-field v-model="form.interval" label="重复间隔 / 分钟" type="digit" required/><van-field v-model="form.repeat_max" label="每轮最多次数" type="digit" required/><p class="hint">间隔 20–1440 分钟，每轮 1–10 次。条件解除后再次达到才开始新一轮。</p><van-button block round type="primary" native-type="submit" :loading="busy">保存提醒</van-button></van-form></template>
     <template v-if="popup==='plan'"><h2>{{form.id?'编辑':'添加'}}{{form.side==='BUY'?'买入':'卖出'}}计划</h2><van-form @submit="savePlan"><van-field v-if="form.side==='BUY'" label="买入方向"><template #input><van-radio-group v-model="form.direction" direction="horizontal"><van-radio name="BELOW">跌到买</van-radio><van-radio name="ABOVE">涨到买</van-radio></van-radio-group></template></van-field><van-field v-model="form.target_price" label="目标价格" type="number" placeholder="精确到 0.001 元" :required="form.side==='BUY'"/><van-field v-if="form.side==='BUY'" v-model="form.amount" label="含费金额上限" type="number" required/><template v-else><van-field v-model="form.target_profit" label="本笔净收益率" type="number" placeholder="例如 5，表示 5%"><template #right-icon>%</template></van-field><p class="hint">目标价、净收益率至少填一项；都填时任一达标即可，但预计扣费后须不亏损。</p><van-cell title="卖出全部持仓"><template #right-icon><van-switch v-model="form.sell_all" size="22"/></template></van-cell><van-field v-if="!form.sell_all" v-model="form.quantity" label="卖出份额" type="digit" required/></template><van-button block round type="primary" native-type="submit" :loading="busy">保存计划</van-button></van-form></template>
     <template v-if="popup==='trade'"><h2>{{form.correction?'纠正成交记录':'确认实际成交'}}</h2><p class="hint">填写券商实际成交数据。手动录入允许记录实际发生的亏损卖出。</p><van-form @submit="saveTrade"><van-field label="买卖方向"><template #input><van-radio-group v-model="form.side" direction="horizontal" :disabled="!!form.plan_id"><van-radio name="BUY">买入</van-radio><van-radio name="SELL">卖出</van-radio></van-radio-group></template></van-field><van-field v-model="form.price" label="实际价格" type="number" required/><van-field v-model="form.quantity" label="实际份额" type="digit" required/><van-field v-model="form.fee" label="实际手续费" type="number" required placeholder="可填 0，但不可留空"><template #button><button type="button" class="text-button" @click="estimateFee">按设置估算</button></template></van-field><van-field v-model="form.occurred_at" type="datetime-local" label="成交时间" required/><p class="hint">北京时间；更早补录按记账顺序计算，请核对成本。</p><van-field v-if="form.correction" v-model="form.reason" label="纠错原因" required/><div class="preview">{{tradePreview(form)}}</div><van-button block round type="primary" native-type="submit" :loading="busy">{{form.correction?'保留原记录并纠错':'核对无误，确认入账'}}</van-button></van-form></template>

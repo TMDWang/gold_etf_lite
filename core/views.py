@@ -7,9 +7,9 @@ from rest_framework.response import Response
 from rest_framework import serializers as s
 from core.models import User, Account, Entry, Plan, Episode, GroupEpisode, Delivery, Quote, Minute, SystemState, Audit, PublicAlert
 from core.common import BusinessError
-from core.ledger import get_account, initialize, post_entry, require_initialized, effective_payloads, cash_round
-from core.serializers import PlanSerializer, SettingsSerializer, AlertSerializer, BuyPreviewSerializer
-from core.plans import evaluate, estimated_fee
+from core.ledger import get_account, initialize, post_entry, require_initialized, effective_payloads, cash_round, position_snapshot, sale_cost, holding_history
+from core.serializers import PlanSerializer, SettingsSerializer, AlertSerializer, BuyPreviewSerializer, SellPreviewSerializer
+from core.plans import evaluate, estimated_fee, affordable_quantity
 from core.auth_views import AppAdmin
 
 def account_data(a):
@@ -46,20 +46,67 @@ class InitializeView(APIView):
     def post(self,request):
         return Response(account_data(initialize(request.user,request.data)),status=201)
 
-class BuyPreviewView(APIView):
-    def post(self,request):
-        serializer=BuyPreviewSerializer(data=request.data);serializer.is_valid(raise_exception=True)
-        account=Account.objects.filter(user=request.user).first()
-        if not account or not account.initialized_at:raise BusinessError('请先初始化账本')
-        d=serializer.validated_data;gross=cash_round(d['price']*d['quantity'])
-        fee=d.get('fee')
-        if fee is None:fee=estimated_fee(request.user,gross)
-        if fee is None:raise BusinessError('请在设置中补齐券商费用参数，或手动输入预计手续费')
-        if fee>gross:raise BusinessError('手续费不能超过成交金额，请核对')
-        total=gross+fee;shares=account.shares+d['quantity'];basis=account.cost_basis+total
-        return Response({'gross':str(gross),'fee':str(fee),'fee_estimated':d.get('fee') is None,'total':str(total),'cash_sufficient':account.cash>=total,
-            'before':{'shares':account.shares,'cash':str(account.cash),'cost_basis':str(account.cost_basis),'unit_cost':str(account.cost_basis/account.shares) if account.shares else None},
-            'after':{'shares':shares,'cash':str(account.cash-total),'cost_basis':str(basis),'unit_cost':str(basis/shares)}})
+class TradePreviewView(APIView):
+    serializer_class = BuyPreviewSerializer
+    side = 'BUY'
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account = Account.objects.filter(user=request.user).first()
+        if not account:
+            raise BusinessError('请先初始化账本')
+        require_initialized(account)
+        data = serializer.validated_data
+        price = data['price']
+        fee = data.get('fee')
+        fee_estimated = fee is None
+        if fee_estimated and estimated_fee(request.user, D(0)) is None:
+            raise BusinessError('请在设置中补齐券商费用参数，或手动输入预计手续费')
+
+        def fee_for(gross):
+            return estimated_fee(request.user, gross) if fee_estimated else fee
+
+        quantity = data.get('quantity')
+        if quantity is None:
+            quantity = affordable_quantity(price, data['budget'], fee_for, max_quantity=100000000)
+            if quantity == 0:
+                raise BusinessError('预算扣除手续费后不足买入 100 份')
+        gross = cash_round(price * quantity)
+        fee = fee_for(gross)
+        if fee > gross:
+            raise BusinessError('手续费不能超过成交金额，请核对')
+        shares, cash, basis = account.shares, account.cash, account.cost_basis
+        before = position_snapshot(shares, cash, basis)
+        if self.side == 'SELL':
+            if quantity > shares:
+                raise BusinessError('卖出份额不能超过当前持仓')
+            if quantity % 100 and quantity != shares:
+                raise BusinessError('不足一手的余份须一次全部卖出')
+            cost = sale_cost(shares, basis, quantity)
+            net = gross - fee
+            realized = net - cost
+            metrics = {'net': str(net), 'realized': str(realized),
+                       'return_pct': str(realized * 100 / cost) if cost else None}
+            after = position_snapshot(shares - quantity, cash + net, basis - cost)
+        else:
+            total = gross + fee
+            metrics = {'total': str(total), 'cash_sufficient': cash >= total}
+            after = position_snapshot(shares + quantity, cash - total, basis + total)
+        return Response({'quantity': quantity, 'gross': str(gross), 'fee': str(fee), 'fee_estimated': fee_estimated,
+                         'before': before, 'after': after, **metrics})
+
+
+class SellPreviewView(TradePreviewView):
+    serializer_class = SellPreviewSerializer
+    side = 'SELL'
+
+
+class HoldingHistoryView(APIView):
+    def get(self, request):
+        account = Account.objects.filter(user=request.user, initialized_at__isnull=False).first()
+        return Response(holding_history(account) if account else {'points': [], 'truncated': False})
+
 
 class EntriesView(APIView):
     def get(self,request):

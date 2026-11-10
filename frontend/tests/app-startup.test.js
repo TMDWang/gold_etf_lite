@@ -5,7 +5,7 @@ import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
 import {createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice} from '../src/loading.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,buyPreviewForm,buyPreviewResult,openBuyPreview,calculateBuyPreview,applyPrice,acceptStreamPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
+function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,previewForm,previewResult,openTradePreview,calculatePreview,toggleHoldingHistory,applyPrice,acceptStreamPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
@@ -39,13 +39,13 @@ test('new version does not interrupt login or first account setup',async()=>{
 test('an old buy preview response is discarded after the inputs change',async()=>{
  const pending=deferred();const s=app(async()=>[],async()=>pending.promise)
  s.me.value={id:1};s.account.value={initialized_at:'now',shares:100,cash:'500',cost_basis:'400'}
- s.openBuyPreview();s.buyPreviewForm.price='4';const task=s.calculateBuyPreview();s.buyPreviewForm.price='5'
+ s.openTradePreview('BUY');s.previewForm.price='4';const task=s.calculatePreview();s.previewForm.price='5'
  pending.resolve({after:{shares:200}});await task
- assert.equal(s.buyPreviewResult.value,null)
+ assert.equal(s.previewResult.value,null)
 })
 test('reset clears any personal buy preview',()=>{
- const s=app(async()=>[]);s.buyPreviewForm.price='4';s.buyPreviewResult.value={after:{cash:'10'}}
- s.resetPrivate();assert.equal(s.buyPreviewForm.price,'');assert.equal(s.buyPreviewResult.value,null)
+ const s=app(async()=>[]);s.previewForm.price='4';s.previewResult.value={after:{cash:'10'}}
+ s.resetPrivate();assert.equal(s.previewForm.price,'');assert.equal(s.previewResult.value,null)
 })
 test('holdings refresh does not download unused intraday curve',()=>{
  const paths=[];const s=app(async path=>{paths.push(path);return path.startsWith('/entries/')?{results:[],count:0}:{initialized_at:'now'}})
@@ -104,4 +104,15 @@ test('a changed price reconciles the real same-price points missed by the stream
  await Promise.resolve()
  await Promise.resolve()
  assert.deepEqual(s.market.value.points,points)
+})
+
+
+test('sell preview uses the sell route and never records a trade',async()=>{
+ const writes=[]
+ const s=app(async()=>[],async(path,body)=>{writes.push({path,body});return{net:'420',after:{shares:0}}})
+ s.me.value={id:1};s.account.value={initialized_at:'now',shares:50,cash:'500',cost_basis:'200'}
+ s.openTradePreview('SELL');s.previewForm.price='4.500'
+ await s.calculatePreview()
+ assert.deepEqual(writes,[{path:'/account/sell-preview/',body:{price:'4.500',quantity:'50'}}])
+ assert.equal(s.previewResult.value.net,'420')
 })

@@ -34,17 +34,29 @@ class TradeSerializer(s.Serializer):
             raise s.ValidationError('请刷新计划后再确认')
         return data
 
-class BuyPreviewSerializer(s.Serializer):
+class SellPreviewSerializer(s.Serializer):
     price = s.DecimalField(max_digits=10, decimal_places=3, min_value=D('0.001'), max_value=D('1000'))
-    quantity = s.IntegerField(min_value=100, max_value=100000000)
+    quantity = s.IntegerField(min_value=1, max_value=100000000)
     fee = s.DecimalField(max_digits=14, decimal_places=2, min_value=0, required=False, allow_null=True)
 
     def validate(self, data):
-        if data['quantity'] % 100:
-            raise s.ValidationError('买入份额必须是 100 的整数倍')
         if data.get('fee') is not None and data['fee'] > data['price'] * data['quantity']:
             raise s.ValidationError('手续费不能超过成交金额，请核对')
         return data
+
+
+class BuyPreviewSerializer(SellPreviewSerializer):
+    quantity = s.IntegerField(min_value=100, max_value=100000000, required=False)
+    budget = s.DecimalField(max_digits=18, decimal_places=2, min_value=D('0.01'), required=False)
+
+    def validate(self, data):
+        if ('quantity' in data) == ('budget' in data):
+            raise s.ValidationError('请选择按份额或按含费预算预览')
+        if 'quantity' not in data:
+            return data
+        if data['quantity'] % 100:
+            raise s.ValidationError('买入份额必须是 100 的整数倍')
+        return super().validate(data)
 
 class CashSerializer(s.Serializer):
     amount = s.DecimalField(max_digits=18, decimal_places=2)
