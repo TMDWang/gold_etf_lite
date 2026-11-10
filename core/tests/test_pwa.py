@@ -20,7 +20,24 @@ class PwaTests(TestCase):
             try:
                 self.assertEqual(r.status_code,200)
                 self.assertEqual(r['Service-Worker-Allowed'],'/')
-                self.assertIn('no-cache',r['Cache-Control'])
+                self.assertIn('no-store',r['Cache-Control'])
                 self.assertIn('javascript',r['Content-Type'])
             finally:
                 r.close()
+
+
+    def test_home_and_offline_shell_serve_current_build_without_http_caching(self):
+        with tempfile.TemporaryDirectory() as tmp, override_settings(BASE_DIR=Path(tmp)):
+            dist = Path(tmp) / 'frontend' / 'dist'
+            dist.mkdir(parents=True)
+            entry = b'<!doctype html><meta name="gold-etf-version" content="0.5.1">'
+            (dist / 'index.html').write_bytes(entry)
+            for path in ('/', '/offline-shell.html'):
+                response = self.client.get(path)
+                with self.subTest(path=path):
+                    try:
+                        self.assertEqual(response.status_code, 200)
+                        self.assertIn('no-store', response['Cache-Control'])
+                        self.assertEqual(b''.join(response.streaming_content), entry)
+                    finally:
+                        response.close()

@@ -18,7 +18,7 @@ def index(request):
     target=settings.BASE_DIR/'frontend'/'dist'/'index.html'
     if target.exists():
         response=FileResponse(target.open('rb'),content_type='text/html; charset=utf-8')
-        response['Cache-Control']='no-cache'
+        response['Cache-Control']='no-store'
         return response
     return HttpResponse('请先构建前端，参见 README.md',status=503)
 
@@ -26,12 +26,12 @@ def service_worker(request):
     target=settings.BASE_DIR/'frontend'/'dist'/'sw.js'
     if not target.exists():return HttpResponse('请重新构建前端',status=404)
     response=FileResponse(target.open('rb'),content_type='application/javascript; charset=utf-8')
-    response['Cache-Control']='no-cache, max-age=0, must-revalidate'
+    response['Cache-Control']='no-store'
     response['Service-Worker-Allowed']='/'
     return response
 
 urlpatterns = [
-    path('',index),path('health/',health),path('sw.js',service_worker),
+    path('',index),path('offline-shell.html',index),path('health/',health),path('sw.js',service_worker),
     path('api/auth/csrf/',a.CsrfView.as_view()),path('api/auth/login/',a.LoginView.as_view()),
     path('api/auth/register/',a.RegisterView.as_view()),path('api/auth/logout/',a.LogoutView.as_view()),path('api/auth/password/',a.PasswordView.as_view()),
     path('api/me/',a.MeView.as_view()),path('api/account/',v.AccountView.as_view()),path('api/account/initialize/',v.InitializeView.as_view()),
