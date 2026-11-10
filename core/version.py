@@ -1,5 +1,5 @@
 """Backend release version; update according to the version policy in README."""
-BACKEND_VERSION = '0.4.0'
+BACKEND_VERSION = '0.5.0'
 
 def backend_version():
     return BACKEND_VERSION

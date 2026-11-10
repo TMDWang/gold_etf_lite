@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {tradingChartData,chartExtremes,extremeMarkers} from '../src/price-chart.js'
+import {tradingChartData,chartExtremes,extremeMarkers,marketChartData} from '../src/price-chart.js'
 
 test('markers use actual visible extrema and remain inside the chart edges',()=>{
   const chart=tradingChartData([{at:'2026-11-05T09:30:00+08:00',price:'4.9'},{at:'2026-11-05T15:00:00+08:00',price:'5.2'}])
@@ -56,4 +56,15 @@ test('connects the usual 11:30 and 13:01 observations without inventing a 13:00 
   assert.equal(after,before+1)
   assert.equal(result.times.includes('13:00'),false)
   assert.deepEqual(result.prices.slice(before,after+1),[5.001,5.010])
+})
+
+
+test('history keeps separate observations at the same time on different dates',()=>{
+  const chart=marketChartData([
+    {at:'2026-11-09T09:30:00+08:00',price:'4.111'},
+    {at:'2026-11-10T09:30:00+08:00',price:'4.222'},
+  ],3)
+  assert.equal(chart.prices[chart.times.indexOf('11-09 09:30')],4.111)
+  assert.equal(chart.prices[chart.times.indexOf('11-10 09:30')],4.222)
+  assert.ok(chart.times.some((label,i)=>label.endsWith('分隔') && chart.prices[i]===null))
 })

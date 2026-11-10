@@ -144,6 +144,41 @@ def collect_minutes(now=None):
         return False
     return True
 
+def quote_history(days, now=None):
+    now = now or timezone.now()
+    today = now.astimezone(CN).date()
+    first = today - timedelta(days=days - 1)
+    start = datetime.combine(first, time.min, tzinfo=CN)
+    points = Minute.objects.filter(at__gte=start, at__lte=now).order_by('at')
+    return {'days': days, 'from': str(first), 'to': str(today), 'points': [
+        {'at': row.at.astimezone(CN).isoformat(), 'price': str(row.price), 'source': row.source}
+        for row in points
+    ]}
+
+
+def intraday_reference(kind, quote):
+    at = quote.source_at.astimezone(CN)
+    if not is_trading(at):
+        return None
+    start = datetime.combine(at.date(), time.min, tzinfo=CN)
+    minutes = Minute.objects.filter(at__gte=start, at__lte=at)
+    if kind == 'PCT_OPEN':
+        return minutes.order_by('at').values_list('price', flat=True).first()
+    if kind == 'DRAWDOWN':
+        from django.db.models import Q
+        minute_high = minutes.order_by('-price').values_list('price', flat=True).first()
+        morning = Q(source_at__range=(start.replace(hour=9, minute=30), start.replace(hour=11, minute=30)))
+        afternoon = Q(source_at__range=(start.replace(hour=13), start.replace(hour=15)))
+        quote_high = Quote.objects.filter(morning | afternoon, source_at__lte=at).order_by('-price').values_list('price', flat=True).first()
+        return max(value for value in (quote.price, minute_high, quote_high) if value is not None)
+    cutoff = at - timedelta(minutes=10)
+    session_start = time(13) if at.hour >= 13 else time(9, 30)
+    if cutoff.time() < session_start:
+        return None
+    return minutes.filter(at__lte=cutoff, at__gte=max(cutoff - timedelta(minutes=2),
+        datetime.combine(at.date(), session_start, tzinfo=CN))).order_by('-at').values_list('price', flat=True).first()
+
+
 def market_data():
     now=timezone.now();today=now.astimezone(CN).date();q=Quote.objects.order_by('-source_at','-pk').first()
     state=SystemState.objects.filter(pk='market').values_list('value',flat=True).first() or {}

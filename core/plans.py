@@ -1,6 +1,13 @@
 from decimal import Decimal as D, ROUND_CEILING
 from core.ledger import cash_round
 
+ALERT_LABELS = {
+    'PRICE': '价格', 'PCT_CLOSE': '相对昨收涨跌幅', 'PCT_COST': '相对持仓成本涨跌幅',
+    'PCT_OPEN': '相对今日首个采样涨跌幅', 'DRAWDOWN': '自今日已采样高点回撤', 'MOVE_10M': '近10分钟价格变化',
+}
+PRICE_ALERT_KINDS = {'PRICE', 'MOVE_10M'}
+INTRADAY_ALERT_KINDS = {'PCT_OPEN', 'DRAWDOWN', 'MOVE_10M'}
+
 def estimated_fee(user,gross):
     if any(x is None for x in (user.fee_rate,user.fee_minimum,user.fee_extra)):
         return None
@@ -21,18 +28,54 @@ def affordable_quantity(price, budget, fee_for, max_quantity=None):
     return low * 100
 
 
+def minimum_sale_price(quantity, cost, fee_for, target_pct=0):
+    target_net = cost * (1 + D(target_pct) / 100)
+
+    def covers(ticks):
+        gross = cash_round(D(ticks) * D('0.001') * quantity)
+        return gross - fee_for(gross) >= target_net
+
+    low, high = 1, 1000000
+    if not covers(high):
+        return None
+    while low < high:
+        mid = (low + high) // 2
+        if covers(mid):
+            high = mid
+        else:
+            low = mid + 1
+    return D(low) * D('0.001')
+
+
 def evaluate(plan,account,price,user,quote=None):
     result={'eligible':False,'reason':'等待有效行情','quantity':0,'price':str(price) if price else None,'net':None}
     if plan.side=='INFO':
         if not price:return result
         price=D(price)
-        if plan.alert_kind=='PRICE': value=price
+        kind = plan.alert_kind
+        if kind == 'PRICE':
+            value = price
         else:
-            if plan.alert_kind=='PCT_CLOSE': basis=quote.previous_close if quote else None
-            else: basis=account.cost_basis/D(account.shares) if account.initialized_at and account.shares and account.cost_basis>0 else None
-            if not basis or basis<=0:
-                result['reason']='缺少有效昨收价或持仓成本，暂不提醒';return result
-            value=(price/D(basis)-1)*100
+            if kind == 'PCT_CLOSE':
+                basis = quote.previous_close if quote else None
+            elif kind == 'PCT_COST':
+                basis = D(account.cost_basis) / account.shares if account and account.initialized_at and account.shares else None
+            elif quote and kind in INTRADAY_ALERT_KINDS:
+                from core.market import intraday_reference
+                basis = intraday_reference(kind, quote)
+            else:
+                basis = None
+            if basis is None or basis <= 0:
+                result['reason'] = '缺少有效比较基准，暂不提醒'
+                if kind in INTRADAY_ALERT_KINDS:
+                    result['comparison_missing'] = True
+                return result
+            if kind == 'MOVE_10M':
+                value = price - basis
+            elif kind == 'DRAWDOWN':
+                value = (1 - price / basis) * 100
+            else:
+                value = (price / basis - 1) * 100
         result['value']=str(value)
         result['eligible']=value>=plan.alert_threshold if plan.direction=='ABOVE' else value<=plan.alert_threshold
         result['reason']='行情条件已达到' if result['eligible'] else '尚未达到行情条件'

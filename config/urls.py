@@ -37,8 +37,10 @@ urlpatterns = [
     path('api/me/',a.MeView.as_view()),path('api/account/',v.AccountView.as_view()),path('api/account/initialize/',v.InitializeView.as_view()),
     path('api/account/buy-preview/',v.TradePreviewView.as_view()),
     path('api/account/sell-preview/',v.SellPreviewView.as_view()),
+    path('api/account/sell-batch-preview/',v.SellBatchPreviewView.as_view()),
     path('api/account/holding-history/',v.HoldingHistoryView.as_view()),
     path('api/entries/',v.EntriesView.as_view()),path('api/cash/',v.CashView.as_view()),path('api/entries/<int:pk>/correct/',v.CorrectView.as_view()),
+    path('api/entries/export.csv',v.EntriesExportView.as_view()),
     path('api/plans/',v.PlansView.as_view()),path('api/plans/<int:pk>/',v.PlanDetailView.as_view()),path('api/plans/<int:pk>/cancel/',v.CancelPlanView.as_view()),
     path('api/alerts/',v.AlertsView.as_view()),path('api/alerts/<int:pk>/',v.AlertDetailView.as_view()),path('api/alerts/<int:pk>/ignore/',v.AlertIgnoreView.as_view()),
     path('api/public-alerts/',v.PublicAlertsView.as_view()),
@@ -47,5 +49,7 @@ urlpatterns = [
     path('api/episodes/',v.EpisodesView.as_view()),path('api/episodes/<int:pk>/ignore/',v.IgnoreView.as_view()),
     path('api/settings/',v.SettingsView.as_view()),path('api/settings/test-push/',v.TestPushView.as_view()),path('api/deliveries/',v.DeliveryView.as_view()),
     path('api/market/',v.MarketView.as_view()),path('api/quote/',v.QuoteView.as_view()),path('api/quote/stream/',quote_stream),path('api/admin/invites/',a.InvitesView.as_view()),
+    path('api/market/history/',v.MarketHistoryView.as_view()),
+    path('api/market/history.csv',v.MarketHistoryView.as_view(download=True)),
     path('api/admin/users/',a.AdminUsersView.as_view()),path('api/admin/users/<int:pk>/',a.AdminUsersView.as_view()),path('api/admin/system/',v.SystemView.as_view()),
 ]

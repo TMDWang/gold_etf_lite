@@ -34,7 +34,7 @@ class TradeSerializer(s.Serializer):
             raise s.ValidationError('请刷新计划后再确认')
         return data
 
-class SellPreviewSerializer(s.Serializer):
+class PreviewSerializer(s.Serializer):
     price = s.DecimalField(max_digits=10, decimal_places=3, min_value=D('0.001'), max_value=D('1000'))
     quantity = s.IntegerField(min_value=1, max_value=100000000)
     fee = s.DecimalField(max_digits=14, decimal_places=2, min_value=0, required=False, allow_null=True)
@@ -45,7 +45,16 @@ class SellPreviewSerializer(s.Serializer):
         return data
 
 
-class BuyPreviewSerializer(SellPreviewSerializer):
+class SellPreviewSerializer(PreviewSerializer):
+    target_profit = s.DecimalField(max_digits=9, decimal_places=4, min_value=0,
+                                   max_value=D('10000'), required=False)
+
+
+class SellBatchPreviewSerializer(s.Serializer):
+    legs = PreviewSerializer(many=True, min_length=2, max_length=5)
+
+
+class BuyPreviewSerializer(PreviewSerializer):
     quantity = s.IntegerField(min_value=100, max_value=100000000, required=False)
     budget = s.DecimalField(max_digits=18, decimal_places=2, min_value=D('0.01'), required=False)
 
@@ -95,9 +104,9 @@ class SettingsSerializer(s.Serializer):
     push_token = s.RegexField(r'^[a-zA-Z0-9]{20,100}$', required=False, allow_blank=True, write_only=True)
 
 class AlertSerializer(s.Serializer):
-    kind=s.ChoiceField(choices=['PRICE','PCT_CLOSE','PCT_COST'])
+    kind=s.ChoiceField(choices=['PRICE','PCT_CLOSE','PCT_COST','PCT_OPEN','DRAWDOWN','MOVE_10M'])
     direction=s.ChoiceField(choices=['BELOW','ABOVE'])
-    threshold=s.DecimalField(max_digits=12,decimal_places=4,min_value=D('-100'),max_value=D('10000'))
+    threshold=s.DecimalField(max_digits=12,decimal_places=4,min_value=D('-1000'),max_value=D('10000'))
     interval=s.IntegerField(min_value=20,max_value=1440)
     repeat_max=s.IntegerField(min_value=1,max_value=10)
     label=s.CharField(max_length=80,allow_blank=True,required=False,default='')
@@ -105,4 +114,10 @@ class AlertSerializer(s.Serializer):
     def validate(self,d):
         if d['kind']=='PRICE' and (d['threshold']<=0 or d['threshold']>1000 or d['threshold']!=d['threshold'].quantize(D('0.001'))):
             raise s.ValidationError('价格须大于 0 且不超过 1000，最多三位小数')
+        if d['kind']=='DRAWDOWN' and (d['direction']!='ABOVE' or not 0 < d['threshold'] <= 100):
+            raise s.ValidationError('回撤提醒须选择达到或高于，幅度为大于 0 且不超过 100 的百分比')
+        if d['kind']=='MOVE_10M' and (abs(d['threshold'])>1000 or d['threshold']==0):
+            raise s.ValidationError('近10分钟价格变化须填写非零金额，范围为 -1000 至 1000 元')
+        if d['kind'] in {'PCT_CLOSE','PCT_COST','PCT_OPEN'} and d['threshold'] < -100:
+            raise s.ValidationError('涨跌幅不得低于 -100%')
         return d

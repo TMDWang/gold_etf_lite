@@ -8,8 +8,8 @@ from rest_framework import serializers as s
 from core.models import User, Account, Entry, Plan, Episode, GroupEpisode, Delivery, Quote, Minute, SystemState, Audit, PublicAlert
 from core.common import BusinessError
 from core.ledger import get_account, initialize, post_entry, require_initialized, effective_payloads, cash_round, position_snapshot, sale_cost, holding_history
-from core.serializers import PlanSerializer, SettingsSerializer, AlertSerializer, BuyPreviewSerializer, SellPreviewSerializer
-from core.plans import evaluate, estimated_fee, affordable_quantity
+from core.serializers import PlanSerializer, SettingsSerializer, AlertSerializer, BuyPreviewSerializer, SellPreviewSerializer, SellBatchPreviewSerializer
+from core.plans import evaluate, estimated_fee, affordable_quantity, minimum_sale_price
 from core.auth_views import AppAdmin
 
 def account_data(a):
@@ -46,6 +46,29 @@ class InitializeView(APIView):
     def post(self,request):
         return Response(account_data(initialize(request.user,request.data)),status=201)
 
+def preview_account(user):
+    account = Account.objects.filter(user=user).first()
+    if not account:
+        raise BusinessError('请先初始化账本')
+    require_initialized(account)
+    return account
+
+
+def preview_fee_for(user, manual_fee):
+    if manual_fee is not None:
+        return lambda _: manual_fee
+    if estimated_fee(user, D(0)) is None:
+        raise BusinessError('请在设置中补齐券商费用参数，或手动输入预计手续费')
+    return lambda gross: estimated_fee(user, gross)
+
+
+def validate_sale_quantity(quantity, shares):
+    if quantity > shares:
+        raise BusinessError('卖出份额不能超过当前持仓')
+    if quantity % 100 and quantity != shares:
+        raise BusinessError('不足一手的余份须一次全部卖出')
+
+
 class TradePreviewView(APIView):
     serializer_class = BuyPreviewSerializer
     side = 'BUY'
@@ -53,19 +76,12 @@ class TradePreviewView(APIView):
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
-        account = Account.objects.filter(user=request.user).first()
-        if not account:
-            raise BusinessError('请先初始化账本')
-        require_initialized(account)
+        account = preview_account(request.user)
         data = serializer.validated_data
         price = data['price']
         fee = data.get('fee')
         fee_estimated = fee is None
-        if fee_estimated and estimated_fee(request.user, D(0)) is None:
-            raise BusinessError('请在设置中补齐券商费用参数，或手动输入预计手续费')
-
-        def fee_for(gross):
-            return estimated_fee(request.user, gross) if fee_estimated else fee
+        fee_for = preview_fee_for(request.user, fee)
 
         quantity = data.get('quantity')
         if quantity is None:
@@ -79,15 +95,17 @@ class TradePreviewView(APIView):
         shares, cash, basis = account.shares, account.cash, account.cost_basis
         before = position_snapshot(shares, cash, basis)
         if self.side == 'SELL':
-            if quantity > shares:
-                raise BusinessError('卖出份额不能超过当前持仓')
-            if quantity % 100 and quantity != shares:
-                raise BusinessError('不足一手的余份须一次全部卖出')
+            validate_sale_quantity(quantity, shares)
             cost = sale_cost(shares, basis, quantity)
             net = gross - fee
             realized = net - cost
             metrics = {'net': str(net), 'realized': str(realized),
                        'return_pct': str(realized * 100 / cost) if cost else None}
+            breakeven = minimum_sale_price(quantity, cost, fee_for)
+            target_pct = data.get('target_profit')
+            target = minimum_sale_price(quantity, cost, fee_for, target_pct) if target_pct is not None else None
+            metrics.update(breakeven_price=str(breakeven) if breakeven is not None else None,
+                           target_price=str(target) if target is not None else None)
             after = position_snapshot(shares - quantity, cash + net, basis - cost)
         else:
             total = gross + fee
@@ -100,6 +118,38 @@ class TradePreviewView(APIView):
 class SellPreviewView(TradePreviewView):
     serializer_class = SellPreviewSerializer
     side = 'SELL'
+
+
+class SellBatchPreviewView(APIView):
+    def post(self, request):
+        serializer = SellBatchPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account = preview_account(request.user)
+        shares, cash, basis = account.shares, account.cash, account.cost_basis
+        results = []
+        total_net, total_realized = D(0), D(0)
+        for index, leg in enumerate(serializer.validated_data['legs'], 1):
+            quantity, price = leg['quantity'], leg['price']
+            try:
+                validate_sale_quantity(quantity, shares)
+                gross = cash_round(price * quantity)
+                fee = preview_fee_for(request.user, leg.get('fee'))(gross)
+                if fee > gross:
+                    raise BusinessError('手续费不能超过成交金额，请核对')
+            except BusinessError as error:
+                raise BusinessError(f'第 {index} 批：{error}') from error
+            cost = sale_cost(shares, basis, quantity)
+            net = gross - fee
+            realized = net - cost
+            shares -= quantity
+            basis -= cost
+            cash += net
+            total_net += net
+            total_realized += realized
+            results.append({'quantity': quantity, 'price': str(price), 'fee': str(fee), 'net': str(net),
+                            'realized': str(realized), 'shares_after': shares})
+        return Response({'legs': results, 'net': str(total_net), 'realized': str(total_realized),
+                         'after': position_snapshot(shares, cash, basis)})
 
 
 class HoldingHistoryView(APIView):
@@ -124,6 +174,13 @@ class CashView(APIView):
     def post(self,request):
         row,created=post_entry(request.user,request.data,request.headers.get('Idempotency-Key'),kind='CASH')
         return Response(entry_data(row),status=201 if created else 200)
+
+
+class EntriesExportView(APIView):
+    def get(self, request):
+        from core.exports import csv_download, entry_rows
+        columns = ('流水编号','类型','纠错目标','方向','成交时间','份额','成交价','手续费','资金变动','记账时间','备注')
+        return csv_download('518880-entries.csv', columns, entry_rows(request.user))
 
 class CorrectView(APIView):
     def post(self,request,pk):
@@ -230,7 +287,7 @@ def public_rule_data(rule):
 
 def valid_public_rule(data):
     serializer=AlertSerializer(data=data);serializer.is_valid(raise_exception=True)
-    if serializer.validated_data['kind']=='PCT_COST':raise s.ValidationError('公共提醒只能使用价格或相对昨收涨跌幅')
+    if serializer.validated_data['kind']=='PCT_COST':raise s.ValidationError('公共提醒不能使用个人持仓成本')
     return serializer.validated_data
 
 class PublicAlertsAdminView(APIView):
@@ -330,6 +387,20 @@ class MarketView(APIView):
     def get(self,request):
         from core.market import market_data
         return Response(market_data())
+
+
+class MarketHistoryView(APIView):
+    download = False
+
+    def get(self, request):
+        from core.market import quote_history
+        days = s.ChoiceField(choices=['1', '3', '7']).run_validation(request.query_params.get('days', '7'))
+        history = quote_history(int(days))
+        if self.download:
+            from core.exports import csv_download
+            rows = ((point['at'], point['price'], point['source']) for point in history['points'])
+            return csv_download(f'518880-quotes-{days}d.csv', ('北京时间','价格','来源'), rows)
+        return Response(history)
 
 class QuoteView(APIView):
     def get(self,request):

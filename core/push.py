@@ -9,7 +9,7 @@ from django.db.models import F
 from django.utils import timezone
 from core.models import User, Account, Plan, Episode, GroupEpisode, PublicAlert, SystemState, Delivery
 from core.common import BusinessError, throttle
-from core.plans import evaluate
+from core.plans import evaluate, ALERT_LABELS, PRICE_ALERT_KINDS
 
 def cipher():
     try:return Fernet(settings.ENCRYPTION_KEY.encode())
@@ -108,6 +108,7 @@ def deliver_due(now=None):
             quote=usable_quote(now)
             if not quote or not account:continue
             context=evaluate(p,account,quote.price,u,quote=quote)
+            if context.get('comparison_missing'):continue
             if not context['eligible']:
                 e.status='CLOSED';e.save(update_fields=['status']);continue
             # Finite, explicit-rejection retry budget separate from business repetition.
@@ -137,8 +138,8 @@ def deliver_due(now=None):
                 continue
             if p.side=='INFO':
                 title='金笺 · 518880 行情提醒'
-                basis={'PRICE':'价格','PCT_CLOSE':'相对昨收涨跌幅','PCT_COST':'相对持仓成本涨跌幅'}.get(p.alert_kind,'行情')
-                unit='元' if p.alert_kind=='PRICE' else '%'
+                basis=ALERT_LABELS[p.alert_kind]
+                unit='元' if p.alert_kind in PRICE_ALERT_KINDS else '%'
                 content=f"事件 #{e.pk} / {p.alert_label or '行情提醒'}\n参考价 {quote.price} 元（源时间 {quote.source_at.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Shanghai')).isoformat()}）\n{basis} {'达到或高于' if p.direction=='ABOVE' else '达到或低于'} {p.alert_threshold}{unit}；当前 {D(context['value']).quantize(D('0.0001'))}{unit}\n仅供观察行情，不构成买卖建议。\n{settings.PUBLIC_URL}"
             else:
                 title='金笺 · 518880 '+('买入' if p.side=='BUY' else '卖出')+'条件达到'
@@ -185,8 +186,8 @@ def deliver_group_due(now):
             try:token=reserve_token_quota(decrypt_token(config['token_encrypted']),send_now,exclude_id=d.pk)
             except BusinessError:
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='发送前限额或密钥检查未通过');continue
-            unit='元' if rule.kind=='PRICE' else '%'
-            basis='价格' if rule.kind=='PRICE' else '相对昨收涨跌幅'
+            unit='元' if rule.kind in PRICE_ALERT_KINDS else '%'
+            basis=ALERT_LABELS[rule.kind]
             content=f"公共事件 #{e.pk} / {rule.label or '行情提醒'}\n参考价 {q.price} 元（源时间 {q.source_at.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Shanghai')).isoformat()}）\n{basis} {'达到或高于' if rule.direction=='ABOVE' else '达到或低于'} {rule.threshold}{unit}；当前 {D(context['value']).quantize(D('0.0001'))}{unit}\n仅供观察行情，不构成买卖建议。\n{settings.PUBLIC_URL}"
             if not reserve_content(d,token,content,send_now):
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='同内容发送已到本小时上限')

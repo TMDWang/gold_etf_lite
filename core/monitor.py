@@ -46,6 +46,7 @@ def evaluate_all(now=None):
             p=Plan.objects.select_for_update().get(pk=plan_id)
             if p.status!='ACTIVE' or not account:continue
             result=evaluate(p,account,quote.price,user,quote=quote)
+            if result.get('comparison_missing'):continue
             if result['eligible']:
                 if not p.condition_met:
                     p.episode_counter+=1;p.condition_met=True;p.save(update_fields=['episode_counter','condition_met'])
@@ -61,6 +62,7 @@ def evaluate_all(now=None):
         for rule in PublicAlert.objects.select_for_update().filter(active=True):
             fake=Plan(side='INFO',alert_kind=rule.kind,direction=rule.direction,alert_threshold=rule.threshold)
             result=evaluate(fake,None,quote.price,None,quote=quote)
+            if result.get('comparison_missing'):continue
             if result['eligible']:
                 if not rule.condition_met:
                     rule.episode_counter+=1;rule.condition_met=True;rule.save(update_fields=['episode_counter','condition_met'])

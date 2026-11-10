@@ -24,8 +24,31 @@ export function tradingChartData(points) {
   return {times,prices}
 }
 
-export function chartExtremes(points) {
-  const values=tradingChartData(points).prices.filter(value=>value!==null)
+export function marketChartData(points, days=1) {
+  if(days===1)return tradingChartData(points)
+  const grouped=new Map()
+  for(const point of points){
+    const at=Date.parse(point.at)
+    if(!Number.isFinite(at))continue
+    const day=new Date(at+8*3600000).toISOString().slice(0,10)
+    if(!grouped.has(day))grouped.set(day,[])
+    grouped.get(day).push(point)
+  }
+  const times=[],prices=[]
+  for(const day of [...grouped.keys()].sort()){
+    const series=tradingChartData(grouped.get(day))
+    if(times.length){
+      times.push(day+' 分隔')
+      prices.push(null)
+    }
+    times.push(...series.times.map(time=>day.slice(5)+' '+time))
+    prices.push(...series.prices)
+  }
+  return {times,prices}
+}
+
+export function chartExtremes(points, days=1) {
+  const values=marketChartData(points,days).prices.filter(value=>value!==null)
   return values.length?{high:Math.max(...values),low:Math.min(...values)}:{high:null,low:null}
 }
 
