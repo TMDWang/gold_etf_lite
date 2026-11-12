@@ -1,5 +1,6 @@
 from decimal import Decimal as D
 from django.db import transaction
+from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -13,10 +14,16 @@ from core.plans import evaluate, estimated_fee, affordable_quantity, minimum_sal
 from core.auth_views import AppAdmin
 
 def account_data(a):
+    from core.account_tools import cash_summary
+    cash_info = cash_summary(Entry.objects.filter(user_id=a.user_id, kind='CASH'))
     q=Quote.objects.order_by('-source_at','-pk').first()
-    value=q.price*a.shares if q else None
+    value=q.price*a.shares if q else D(0) if not a.shares else None
     floating=value-a.cost_basis if value is not None else None
-    return {'budget':str(a.budget),'cash':str(a.cash),'shares':a.shares,'cost_basis':str(a.cost_basis),'unit_cost':str(a.cost_basis/a.shares) if a.shares else None,'realized':str(a.realized),'initialized_at':a.initialized_at,'initial_cash':str(a.initial_cash),'initial_shares':a.initial_shares,'initial_cost':str(a.initial_cost),'market_value':str(value) if value is not None else None,'floating':str(floating) if floating is not None else None,'total_profit':str(a.realized+floating) if floating is not None else None,'reference_quote':{'price':str(q.price),'source_at':q.source_at} if q else None}
+    investment_profit = a.realized + floating + D(cash_info['cash_result']) if floating is not None and not cash_info['unclassified_count'] else None
+    return {'budget':str(a.budget),'cash':str(a.cash),'shares':a.shares,'cost_basis':str(a.cost_basis),'unit_cost':str(a.cost_basis/a.shares) if a.shares else None,'realized':str(a.realized),'initialized_at':a.initialized_at,'initial_cash':str(a.initial_cash),'initial_shares':a.initial_shares,'initial_cost':str(a.initial_cost),'market_value':str(value) if value is not None else None,'floating':str(floating) if floating is not None else None,'total_profit':str(a.realized+floating) if floating is not None else None,'reference_quote':{'price':str(q.price),'source_at':q.source_at} if q else None,
+            **cash_info, 'investment_profit':str(investment_profit) if investment_profit is not None else None,
+            'equity':str(a.cash+value) if value is not None else str(a.cash) if not a.shares else None,
+            'ledger_revision':Entry.objects.filter(user_id=a.user_id).order_by('-id').values_list('id',flat=True).first() or 0}
 
 def entry_data(e,replacements=None):
     return {'id':e.pk,'kind':e.kind,'payload':e.payload,'reason':e.reason,'corrects':e.corrects_id,'plan':e.plan_id,'created_at':e.created_at,'corrected':e.pk in (replacements or {}),'effective_payload':(replacements or {}).get(e.pk)}
@@ -27,7 +34,9 @@ def plan_data(p,account=None,user=None):
         if d[key] is not None: d[key]=str(d[key])
     q=Quote.objects.order_by('-source_at').first()
     if account and user:
-        d['evaluation']=evaluate(p,account,q.price if q else None,user)
+        from core.activity import rule_status
+        d['evaluation']=rule_status(p,account,user,q)
+    d['snoozed_until'] = p.snoozed_until
     return d
 
 class AccountView(APIView):
@@ -112,7 +121,9 @@ class TradePreviewView(APIView):
             metrics = {'total': str(total), 'cash_sufficient': cash >= total}
             after = position_snapshot(shares + quantity, cash - total, basis + total)
         return Response({'quantity': quantity, 'gross': str(gross), 'fee': str(fee), 'fee_estimated': fee_estimated,
-                         'before': before, 'after': after, **metrics})
+                         'before': before, 'after': after, **metrics, 'calculated_at':timezone.now(),
+                         'reference_price':str(price),'fee_source':'个人费用设置' if fee_estimated else '手动填写',
+                         'ledger_revision':Entry.objects.filter(user=request.user).order_by('-id').values_list('id',flat=True).first() or 0})
 
 
 class SellPreviewView(TradePreviewView):
@@ -162,10 +173,9 @@ class EntriesView(APIView):
     def get(self,request):
         try: page=max(1,int(request.query_params.get('page',1)))
         except (ValueError,TypeError): raise BusinessError('页码无效')
-        qs=Entry.objects.filter(user=request.user).order_by('-id')
-        rows=list(qs[(page-1)*20:page*20])
-        replacements=effective_payloads(list(Entry.objects.filter(user=request.user,kind='CORRECTION').order_by('id')))
-        return Response({'count':qs.count(),'results':[entry_data(e,replacements) for e in rows]})
+        from core.entry_queries import selected_entries
+        rows,replacements,summary=selected_entries(request.user,request.query_params)
+        return Response({'count':len(rows),'results':[entry_data(e,replacements) for e in rows[(page-1)*20:page*20]],'summary':summary})
     def post(self,request):
         row,created=post_entry(request.user,request.data,request.headers.get('Idempotency-Key'))
         return Response(entry_data(row),status=201 if created else 200)
@@ -179,8 +189,8 @@ class CashView(APIView):
 class EntriesExportView(APIView):
     def get(self, request):
         from core.exports import csv_download, entry_rows
-        columns = ('流水编号','类型','纠错目标','方向','成交时间','份额','成交价','手续费','资金变动','记账时间','备注')
-        return csv_download('518880-entries.csv', columns, entry_rows(request.user))
+        columns = ('流水编号','类型','纠错目标','方向','成交时间','份额','成交价','手续费','资金变动','记账时间','备注','有效份额','有效成交价','有效手续费','资金类型','有效方向','有效成交时间','原成交已有纠错')
+        return csv_download('518880-entries.csv', columns, entry_rows(request.user, request.query_params))
 
 class CorrectView(APIView):
     def post(self,request,pk):
@@ -235,8 +245,10 @@ class EpisodesView(APIView):
         return Response([{'id':e.pk,'plan':e.plan_id,'version':e.version,'side':e.plan.side,'status':e.status,'context':e.context,'sent_count':e.sent_count,'created_at':e.created_at} for e in Episode.objects.filter(plan__user=request.user,plan__side__in=['BUY','SELL']).select_related('plan').order_by('-id')[:30]])
 
 def alert_data(p):
+    from core.activity import rule_status
     episode=Episode.objects.filter(plan=p,version=p.version).order_by('-id').first()
-    return {'id':p.pk,'kind':p.alert_kind,'direction':p.direction,'threshold':str(p.alert_threshold),'interval':p.alert_interval,'repeat_max':p.alert_repeat_max,'label':p.alert_label,'enabled':p.status=='ACTIVE','version':p.version,'episode':{'id':episode.pk,'status':episode.status,'context':episode.context,'sent_count':episode.sent_count} if episode else None}
+    evaluation=rule_status(p,Account.objects.filter(user_id=p.user_id).first(),p.user,Quote.objects.order_by('-source_at','-pk').first())
+    return {'id':p.pk,'kind':p.alert_kind,'direction':p.direction,'threshold':str(p.alert_threshold),'interval':p.alert_interval,'repeat_max':p.alert_repeat_max,'label':p.alert_label,'enabled':p.status=='ACTIVE','version':p.version,'evaluation':evaluation,'snoozed_until':p.snoozed_until,'episode':{'id':episode.pk,'status':episode.status,'context':episode.context,'sent_count':episode.sent_count} if episode else None}
 
 def alert_values(p):
     return {'kind':p.alert_kind,'direction':p.direction,'threshold':p.alert_threshold,'interval':p.alert_interval,'repeat_max':p.alert_repeat_max,'label':p.alert_label}
@@ -279,11 +291,22 @@ class AlertIgnoreView(APIView):
         with transaction.atomic():
             User.objects.select_for_update().get(pk=request.user.pk)
             p=get_object_or_404(Plan.objects.select_for_update(),user=request.user,pk=pk,side='INFO',status='ACTIVE')
-            Episode.objects.filter(plan=p,version=p.version,status__in=['OPEN','UNKNOWN']).update(status='IGNORED')
-        return Response({'detail':'本轮提醒已停止'})
+            from core.activity import pause_plan
+            result=pause_plan(request.user,p,request.data)
+        return Response(result)
 
-def public_rule_data(rule):
-    return {'id':rule.pk,'kind':rule.kind,'direction':rule.direction,'threshold':str(rule.threshold),'interval':rule.interval,'repeat_max':rule.repeat_max,'label':rule.label}
+def public_rule_data(rule, context=None):
+    from types import SimpleNamespace
+    from core.activity import rule_status
+    if context is None:
+        group = SystemState.objects.filter(pk='group-push').values_list('value', flat=True).first() or {}
+        context = {'account':None, 'user':SimpleNamespace(token_encrypted=bool(group.get('token_encrypted') and group.get('topic'))),
+                   'quote':Quote.objects.order_by('-source_at','-pk').first(), 'now':timezone.now(),
+                   'market_state':SystemState.objects.filter(pk='market').values_list('value', flat=True).first() or {}}
+    plan = Plan(side='INFO',alert_kind=rule.kind,direction=rule.direction,alert_threshold=rule.threshold)
+    evaluation = rule_status(plan, **context)
+    evaluation['delivery_reason'] = '' if evaluation['delivery_ready'] else '公共群通知尚未完成配置，请联系管理员'
+    return {'id':rule.pk,'kind':rule.kind,'direction':rule.direction,'threshold':str(rule.threshold),'interval':rule.interval,'repeat_max':rule.repeat_max,'label':rule.label,'evaluation':evaluation}
 
 def valid_public_rule(data):
     serializer=AlertSerializer(data=data);serializer.is_valid(raise_exception=True)
@@ -354,8 +377,19 @@ class IgnoreView(APIView):
         with transaction.atomic():
             User.objects.select_for_update().get(pk=request.user.pk)
             e=get_object_or_404(Episode.objects.select_for_update(),plan__user=request.user,pk=pk)
-            if e.status in ['OPEN','UNKNOWN']:e.status='IGNORED';e.save(update_fields=['status'])
-        return Response({'detail':'本轮提醒已停止'})
+            from core.activity import pause_plan
+            plan=Plan.objects.select_for_update().get(pk=e.plan_id)
+            scope = request.data.get('scope', 'CURRENT')
+            if e.status not in ['OPEN','UNKNOWN'] or e.version != plan.version:
+                return Response({'scope':scope, 'detail':'该轮提醒已结束，请查看当前计划'})
+            if scope == 'CURRENT':
+                e.status='IGNORED'
+                e.save(update_fields=['status'])
+                Audit.objects.create(actor=request.user,action='reminder_current',object_id=str(e.pk))
+                result={'scope':'CURRENT','detail':'本轮提醒已停止'}
+            else:
+                result=pause_plan(request.user,plan,request.data)
+        return Response(result)
 
 class SettingsView(APIView):
     def get(self,request):
@@ -367,7 +401,9 @@ class SettingsView(APIView):
         with transaction.atomic():
             u=User.objects.select_for_update().get(pk=request.user.pk)
             for k,v in serializer.validated_data.items():
-                if k=='push_token':u.token_encrypted=encrypt_token(v) if v else ''
+                if k=='push_token':
+                    u.token_encrypted=encrypt_token(v) if v else ''
+                    u.push_tested_at=None
                 else:setattr(u,k,v)
             u.save()
         request.user=u
@@ -411,4 +447,4 @@ class SystemView(APIView):
     permission_classes=[AppAdmin]
     def get(self,request):
         from core.monitor import worker_ok
-        return Response({'worker_ok':worker_ok(),'market':SystemState.objects.filter(pk='market').values_list('value',flat=True).first() or {},'backup':SystemState.objects.filter(pk='backup').values_list('value',flat=True).first() or {}})
+        return Response({'worker_ok':worker_ok(),'market':SystemState.objects.filter(pk='market').values_list('value',flat=True).first() or {},'backup':SystemState.objects.filter(pk='backup').values_list('value',flat=True).first() or {},'diagnostics':SystemState.objects.filter(pk='diagnostics').values_list('value',flat=True).first() or {}})

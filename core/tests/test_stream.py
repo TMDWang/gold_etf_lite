@@ -7,6 +7,25 @@ from rest_framework.test import APIClient
 from core.models import User, Quote
 
 class PriceHubTests(IsolatedAsyncioTestCase):
+    async def test_heartbeat_carries_collection_health_without_repeating_price(self):
+        from unittest.mock import patch
+        from core.price_stream import hub, stream_events
+        async def timeout(awaitable, timeout):
+            awaitable.close()
+            raise asyncio.TimeoutError
+        previous = hub.latest
+        hub.latest = {'quote':{'price':'4'},'fresh':True,'collection':{'last_success_at':'now'}}
+        try:
+            with patch.object(hub, 'attach', return_value=asyncio.Queue()), patch.object(hub, 'detach'), patch('core.price_stream.asyncio.wait_for', side_effect=timeout):
+                stream = stream_events('dummy')
+                event = await anext(stream)
+                self.assertIn('event: heartbeat', event)
+                self.assertIn('last_success_at', event)
+                self.assertNotIn('"price"', event)
+                await stream.aclose()
+        finally:
+            hub.latest = previous
+
     async def test_unchanged_price_is_not_rebroadcast_but_status_changes_are(self):
         from core.price_stream import PriceHub
         values=iter([

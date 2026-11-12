@@ -10,6 +10,10 @@ test('trade preview includes fee and direction', () => {
   assert.equal(tradePreview({side:'BUY', quantity:100, price:'5',fee:'1'}), '现金 -501.00 · 份额 +100')
   assert.equal(tradePreview({side:'SELL', quantity:100, price:'5',fee:'1'}), '现金 +499.00 · 份额 -100')
 })
+
+test('a missing actual fee is not silently displayed as zero',()=>{
+  assert.equal(tradePreview({side:'BUY',quantity:100,price:'4',fee:''}), '请先填写价格、份额和实际手续费')
+})
 test('default datetime input matches native minute step and Beijing timezone', () => {
   assert.equal(beijingInput('2026-10-21T11:46:10Z'), '2026-10-21T19:46')
 })

@@ -3,9 +3,10 @@ import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {ref,reactive,computed,watch,defineAsyncComponent,nextTick} from 'vue'
 import {createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice} from '../src/loading.js'
+import {beijingInput,money,tradePreview} from '../src/display.js'
 const deferred=()=>{let resolve;const promise=new Promise(a=>{resolve=a});return{promise,resolve}}
 const source=(await readFile(new URL('../src/App.vue',import.meta.url),'utf8')).split('<script setup>')[1].split('</script>')[0].replace(/^import .*$/gm,'')
-function app(request,submit=async()=>({})){const deps={ref,reactive,computed,watch,defineAsyncComponent,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:async()=>{},closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,resetPrivate,loading,busy,credentials,init,updateAvailable,previewForm,previewResult,openTradePreview,calculatePreview,toggleHoldingHistory,applyPrice,acceptStreamPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
+function app(request,submit=async()=>({}),confirm=async()=>{}){const deps={ref,reactive,computed,watch,defineAsyncComponent,beijingInput,money,tradePreview,onMounted(){},onBeforeUnmount(){},createSectionLoader,createSessionRequests,resolveEpisodePlan,networkNotice,registerShellWorker(){},createPriceStream(){},rawApi:request,rawPost:submit,showToast(){},showSuccessToast(){},showConfirmDialog:confirm,closeDialog(){}};return new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${source};return {me,account,market,popup,tab,settings,form,sectionState,loader,initialize,refresh,openSettings,openEpisode,openTrade,saveTrade,estimateFee,entryKey,resetPrivate,loading,busy,credentials,init,updateAvailable,previewForm,previewResult,previewNotice,openTradePreview,calculatePreview,toggleHoldingHistory,applyPrice,acceptStreamPrice,holdingValue,holdingFloating,setWorker(w){shellWorker=w}}`)(deps)}
 test('actual initialize flow forces a post-write account reload over pending old snapshot',async()=>{
  const old=deferred();let calls=0
  const state=app(async path=>path==='/account/'?(++calls===1?old.promise:{initialized_at:'now',cash:'900'}):path==='/market/'?{points:[]}:[],async()=>({initialized_at:'now',cash:'900'}))
@@ -115,4 +116,57 @@ test('sell preview uses the sell route and never records a trade',async()=>{
  await s.calculatePreview()
  assert.deepEqual(writes,[{path:'/account/sell-preview/',body:{price:'4.500',quantity:'50'}}])
  assert.equal(s.previewResult.value.net,'420')
+})
+
+
+test('fee changes invalidate a preview while preserving its input fields',()=>{
+ const s=app(async()=>[])
+ s.me.value={id:1};s.account.value={initialized_at:'now',shares:100,cash:'500',cost_basis:'400'}
+ s.openTradePreview('BUY');s.previewForm.price='4';s.previewForm.quantity='100';s.previewResult.value={after:{shares:200}}
+ s.settings.fee_minimum='2'
+ assert.equal(s.previewResult.value,null)
+ assert.equal(s.previewForm.price,'4')
+ assert.equal(s.previewForm.quantity,'100')
+ assert.match(s.previewNotice.value,/重新计算/)
+})
+
+
+test('editing a trade while its impact loads cancels that confirmation',async()=>{
+ const pending=deferred(),writes=[];let confirmations=0
+ const s=app(async()=>[],async(path,body)=>{if(path==='/account/entry-preview/')return pending.promise;writes.push({path,body});return{}},async()=>{confirmations++})
+ s.me.value={id:1};s.account.value={initialized_at:'now',shares:200,cash:'1000',cost_basis:'800'}
+ s.openTrade('BUY');Object.assign(s.form,{price:'3',quantity:'100',fee:'1',occurred_at:'2026-11-09T10:00'})
+ const task=s.saveTrade();s.form.price='4'
+ pending.resolve({before:{shares:200,cash:'1000',unit_cost:'4'},after:{shares:300,cash:'699',unit_cost:'3.67'},ledger_revision:0})
+ await task
+ assert.equal(confirmations,0)
+ assert.equal(writes.length,0)
+ assert.equal(s.form.price,'4')
+ assert.equal(s.popup.value,'trade')
+})
+
+
+test('editing a trade during confirmation also prevents writing the old snapshot',async()=>{
+ const writes=[];let s
+ s=app(async()=>[],async(path,body)=>{
+  if(path==='/account/entry-preview/')return {before:{shares:200,cash:'1000',unit_cost:'4'},after:{shares:300,cash:'699',unit_cost:'3.67'},ledger_revision:0}
+  writes.push({path,body});return{}
+ },async()=>{s.form.fee='2'})
+ s.me.value={id:1};s.account.value={initialized_at:'now',shares:200,cash:'1000',cost_basis:'800'}
+ s.openTrade('BUY');Object.assign(s.form,{price:'3',quantity:'100',fee:'1',occurred_at:'2026-11-09T10:00'})
+ await s.saveTrade()
+ assert.equal(writes.length,0)
+ assert.equal(s.form.fee,'2')
+ assert.equal(s.popup.value,'trade')
+})
+
+
+test('manual fee button uses saved server settings before settings popup is opened',async()=>{
+ const paths=[]
+ const s=app(async()=>[],async(path)=>{paths.push(path);return {fee:'1.00'}})
+ s.me.value={id:1};s.account.value={initialized_at:'now',shares:200,cash:'1000',cost_basis:'800'}
+ s.openTrade('BUY');Object.assign(s.form,{price:'3',quantity:'100',fee:''})
+ await s.estimateFee()
+ assert.deepEqual(paths,['/account/fee-preview/'])
+ assert.equal(s.form.fee,'1.00')
 })

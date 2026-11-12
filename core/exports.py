@@ -21,10 +21,16 @@ def spreadsheet_text(value):
     return text
 
 
-def entry_rows(user):
-    for entry in Entry.objects.filter(user=user).order_by('id').iterator():
+def entry_rows(user, params=None):
+    from core.entry_queries import selected_entries
+    rows, replacements, _ = selected_entries(user, params or {})
+    for entry in reversed(rows):
         data = entry.payload
+        effective = replacements.get(entry.pk, data)
         yield (entry.pk, {'TRADE': '成交', 'CASH': '资金变动', 'CORRECTION': '纠错'}[entry.kind],
                entry.corrects_id or '', data.get('side', ''), data.get('occurred_at', ''),
                data.get('quantity', ''), data.get('price', ''), data.get('fee', ''),
-               data.get('amount', ''), entry.created_at.isoformat(), spreadsheet_text(entry.reason))
+               data.get('amount', ''), entry.created_at.isoformat(), spreadsheet_text(entry.reason),
+               effective.get('quantity', ''), effective.get('price', ''), effective.get('fee', ''),
+               data.get('category', 'UNCLASSIFIED') if entry.kind == 'CASH' else '',
+               effective.get('side', ''), effective.get('occurred_at', ''), '是' if entry.pk in replacements else '否')

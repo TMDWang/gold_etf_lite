@@ -4,6 +4,7 @@ from django.db import models
 class User(AbstractUser):
     is_app_admin = models.BooleanField(default=False)
     token_encrypted = models.TextField(blank=True)
+    push_tested_at = models.DateTimeField(null=True, blank=True)
     fee_rate = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
     fee_minimum = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     fee_extra = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
@@ -65,6 +66,7 @@ class Plan(models.Model):
     condition_met = models.BooleanField(default=False)
     episode_counter = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    snoozed_until = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -121,6 +123,7 @@ class Delivery(models.Model):
     episode = models.ForeignKey(Episode, on_delete=models.PROTECT, null=True, blank=True)
     group_episode = models.ForeignKey(GroupEpisode, on_delete=models.PROTECT, null=True, blank=True)
     status = models.CharField(max_length=12, default='SENDING')
+    kind = models.CharField(max_length=12, default='ALERT')
     detail = models.CharField(max_length=200, blank=True)
     token_hash = models.CharField(max_length=64, blank=True, db_index=True)
     content_hash = models.CharField(max_length=64, blank=True)
@@ -162,3 +165,16 @@ class RateWindow(models.Model):
     key = models.CharField(max_length=100, primary_key=True)
     started_at = models.DateTimeField()
     count = models.PositiveIntegerField(default=0)
+
+
+class DailyReport(models.Model):
+    user = models.ForeignKey(User, on_delete=models.PROTECT)
+    day = models.DateField()
+    revision = models.PositiveIntegerField()
+    fingerprint = models.CharField(max_length=64)
+    data = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['user', 'day', 'revision'], name='daily_report_revision')]
+        indexes = [models.Index(fields=['user', '-day', '-revision'])]

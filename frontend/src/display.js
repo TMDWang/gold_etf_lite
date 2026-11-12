@@ -11,6 +11,10 @@ export function backupSummary(backup) {
   return `最近成功 ${backup.last_success}`
 }
 export function tradePreview(t) {
+  const values = [t.quantity, t.price, t.fee]
+  if (values.some(value => value === '' || value == null || !Number.isFinite(Number(value))) || Number(t.quantity) <= 0 || Number(t.price) <= 0 || Number(t.fee) < 0) {
+    return '请先填写价格、份额和实际手续费'
+  }
   const amount = Number(t.quantity) * Number(t.price)
   const cash = t.side === 'BUY' ? -amount - Number(t.fee) : amount - Number(t.fee)
   return `现金 ${signed(cash)} · 份额 ${t.side === 'BUY' ? '+' : '-'}${t.quantity}`

@@ -31,3 +31,17 @@ test('a silently stalled connection falls back, while heartbeats keep it alive',
   assert.equal(fallbacks,1);assert.ok(instances[0].closed)
   stream.stop()
 })
+
+
+test('collection heartbeats update health without invoking the price callback',()=>{
+ let instance,prices=0,health
+ class FakeSource {constructor(){this.handlers={};instance=this}addEventListener(k,v){this.handlers[k]=v}close(){}}
+ const stream=createPriceStream({EventSourceImpl:FakeSource,onPrice:()=>prices++,onHeartbeat:value=>health=value,schedule:()=>1,cancel(){}})
+ stream.start()
+ instance.handlers.heartbeat({data:JSON.stringify({collection:{last_success_at:'now'},fresh:true})})
+ assert.equal(prices,0)
+ assert.equal(health.collection.last_success_at,'now')
+ stream.stop()
+ instance.handlers.heartbeat({data:JSON.stringify({collection:{last_success_at:'later'}})})
+ assert.equal(health.collection.last_success_at,'now')
+})

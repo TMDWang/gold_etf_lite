@@ -33,7 +33,7 @@ def scheduled_backup():
     from django.db import close_old_connections
     close_old_connections()
     try:
-        with monitor_lock() as acquired:
+        with monitor_lock(5188802027) as acquired:
             if acquired:run_backup()
     except Exception:
         import logging

@@ -112,6 +112,7 @@ def collect_quotes(now=None):
             failures.append('备源本次未通过校验');selected=primary
     now=snapshot or timezone.now()
     if selected:
+        state['last_success_at'] = now.isoformat()
         previous=Quote.objects.order_by('-source_at').first()
         if not previous or selected['source_at']>=previous.source_at:
             if not previous or previous.source_at!=selected['source_at'] or previous.source!=selected['source'] or previous.price!=selected['price']:
@@ -190,7 +191,7 @@ def market_data():
     message=state.get('message','等待首次采集；行情未就绪时到价提醒暂停')
     if not calendar['calendar_valid']:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
     if settings.PAUSE_NOTIFICATIONS:message='维护模式：自动提醒已暂停，可核对账目及计划'
-    return {'backend_version':backend_version(),'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at,'fetched_at':q.fetched_at} if q else None,'fresh':fresh and calendar['calendar_valid'] and not settings.PAUSE_NOTIFICATIONS,'session_open':is_trading(now),'message':message,**calendar,'notifications_paused':settings.PAUSE_NOTIFICATIONS,'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,'curve_date':str(today),'points':[{'at':m.at,'price':str(m.price)} for m in points],'curve_note':'含采集时点数据；缺失区间留空，不是完整分钟历史。' if sampled else '显示今天已取得的分钟数据；缺失区间留空。'}
+    return {'collection':{k:state.get(k) for k in ('checked_at','last_success_at','available')},'backend_version':backend_version(),'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at,'fetched_at':q.fetched_at} if q else None,'fresh':fresh and calendar['calendar_valid'] and not settings.PAUSE_NOTIFICATIONS,'session_open':is_trading(now),'message':message,**calendar,'notifications_paused':settings.PAUSE_NOTIFICATIONS,'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,'curve_date':str(today),'points':[{'at':m.at,'price':str(m.price)} for m in points],'curve_note':'含采集时点数据；缺失区间留空，不是完整分钟历史。' if sampled else '显示今天已取得的分钟数据；缺失区间留空。'}
 
 def price_data():
     """Small shared quote snapshot: no account data or full chart history."""
@@ -203,7 +204,7 @@ def price_data():
     message=state.get('message','等待首次采集；行情未就绪时到价提醒暂停')
     if not calendar['calendar_valid']:message='交易日历未覆盖当前日期，请联系维护者更新；到价提醒暂停'
     if settings.PAUSE_NOTIFICATIONS:message='维护模式：自动提醒已暂停，可核对账目及计划'
-    return {'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at.isoformat(),'fetched_at':q.fetched_at.isoformat()} if q else None,
+    return {'collection':{k:state.get(k) for k in ('checked_at','last_success_at','available')},'quote':{'price':str(q.price),'source':q.source,'source_at':q.source_at.isoformat(),'fetched_at':q.fetched_at.isoformat()} if q else None,
         'fresh':fresh and calendar['calendar_valid'] and not settings.PAUSE_NOTIFICATIONS,'session_open':open_now,'message':message,**calendar,
         'change_percent':str((q.price/q.previous_close-1)*100) if q and q.previous_close else None,
         'curve_date':str(today),'latest_point':{'at':point.at.isoformat(),'price':str(point.price)} if point else None}

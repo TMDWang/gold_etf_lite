@@ -15,17 +15,17 @@ def worker_ok():
     return bool(row and (timezone.now()-row.updated_at).total_seconds()<210)
 
 @contextmanager
-def monitor_lock():
+def monitor_lock(key=5188802026):
     if connection.vendor!='postgresql':
         yield True
         return
     with connection.cursor() as cursor:
-        cursor.execute('SELECT pg_try_advisory_lock(5188802026)')
+        cursor.execute('SELECT pg_try_advisory_lock(%s)', [key])
         acquired=cursor.fetchone()[0]
     try:yield acquired
     finally:
         if acquired:
-            with connection.cursor() as cursor:cursor.execute('SELECT pg_advisory_unlock(5188802026)')
+            with connection.cursor() as cursor:cursor.execute('SELECT pg_advisory_unlock(%s)', [key])
 
 def usable_quote(now):
     q=Quote.objects.order_by('-source_at','-pk').first()
@@ -45,7 +45,9 @@ def evaluate_all(now=None):
             account=Account.objects.select_for_update().filter(user=user).first()
             p=Plan.objects.select_for_update().get(pk=plan_id)
             if p.status!='ACTIVE' or not account:continue
+            if p.snoozed_until and p.snoozed_until > now:continue
             result=evaluate(p,account,quote.price,user,quote=quote)
+            result['label'] = p.alert_label or ('买入计划' if p.side=='BUY' else '卖出计划' if p.side=='SELL' else '行情提醒')
             if result.get('comparison_missing'):continue
             if result['eligible']:
                 if not p.condition_met:
@@ -62,6 +64,7 @@ def evaluate_all(now=None):
         for rule in PublicAlert.objects.select_for_update().filter(active=True):
             fake=Plan(side='INFO',alert_kind=rule.kind,direction=rule.direction,alert_threshold=rule.threshold)
             result=evaluate(fake,None,quote.price,None,quote=quote)
+            result['label'] = rule.label or '公共行情提醒'
             if result.get('comparison_missing'):continue
             if result['eligible']:
                 if not rule.condition_met:

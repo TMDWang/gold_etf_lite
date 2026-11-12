@@ -1,5 +1,5 @@
 /** One visible-page SSE connection; failed streams fall back without retry storms. */
-export function createPriceStream({EventSourceImpl=globalThis.EventSource,onPrice=()=>{},onState=()=>{},onFallback=()=>{},onOpen=()=>{},schedule=setTimeout,cancel=clearTimeout}={}) {
+export function createPriceStream({EventSourceImpl=globalThis.EventSource,onPrice=()=>{},onState=()=>{},onFallback=()=>{},onOpen=()=>{},onHeartbeat=()=>{},schedule=setTimeout,cancel=clearTimeout}={}) {
   let active=false,source=null,timer=null,watchdog=null,generation=0
   function clearWatchdog(){if(watchdog!==null)cancel(watchdog);watchdog=null}
   function connect() {
@@ -21,7 +21,7 @@ export function createPriceStream({EventSourceImpl=globalThis.EventSource,onPric
       alive()
       try{const value=JSON.parse(event.data);if(value&&typeof value==='object')onPrice(value)}catch{}
     })
-    own.addEventListener('heartbeat',()=>{if(active&&generation===current)alive()})
+    own.addEventListener('heartbeat',event=>{if(active&&generation===current){alive();try{onHeartbeat(JSON.parse(event.data||'{}'))}catch{}}})
     own.onerror=fail
   }
   return {

@@ -68,13 +68,15 @@ def send_test(user):
         if not u.token_encrypted:raise BusinessError('请先保存自己的 PushPlus 密钥')
         throttle(f'push-test:{u.pk}',2,3600)
         token=reserve_quota(u,timezone.now())
-        row=Delivery.objects.create(user=u,token_hash=hashlib.sha256(token.encode()).hexdigest())
+        row=Delivery.objects.create(user=u,kind='TEST',token_hash=hashlib.sha256(token.encode()).hexdigest())
         content='这是你在金笺主动发送的测试消息。518880 提醒只供你自行核对，系统不会自动交易。'
         if not reserve_content(row,token,content,timezone.now()):
             row.status='SKIPPED';row.detail='同内容发送过于频繁';row.save()
             raise BusinessError('同内容发送过于频繁，请一小时后再试',429)
     status,detail=send_http(token,'金笺 · 个人提醒测试',content)
     Delivery.objects.filter(pk=row.pk).update(status=status,detail=detail)
+    if status == 'SENT':
+        User.objects.filter(pk=u.pk, token_encrypted=u.token_encrypted).update(push_tested_at=timezone.now())
     return {'status':status,'detail':detail}
 
 @transaction.atomic
@@ -102,6 +104,7 @@ def deliver_due(now=None):
             raw=Episode.objects.get(pk=ep_id)
             p=Plan.objects.select_for_update().get(pk=raw.plan_id)
             e=Episode.objects.select_for_update().get(pk=ep_id)
+            if p.snoozed_until and p.snoozed_until > now:continue
             maximum=p.alert_repeat_max if p.side=='INFO' else u.reminder_max
             if p.status!='ACTIVE' or p.version!=e.version or e.status!='OPEN' or e.next_at>now or e.sent_count>=maximum:continue
             from core.monitor import usable_quote
@@ -129,7 +132,7 @@ def deliver_due(now=None):
             send_now=timezone.now()
             quote=usable_quote(send_now)
             context=evaluate(p,account,quote.price if quote else None,u,quote=quote)
-            if not u.is_active or not u.token_encrypted or p.version!=e.version or p.status!='ACTIVE' or e.status!='OPEN' or not quote or not context['eligible']:
+            if not u.is_active or not u.token_encrypted or p.version!=e.version or p.status!='ACTIVE' or e.status!='OPEN' or not quote or not context['eligible'] or (p.snoozed_until and p.snoozed_until > send_now):
                 Delivery.objects.filter(pk=d.pk).update(status='SKIPPED',detail='行情、计划或账号状态已变化')
                 continue
             try:token=reserve_quota(u,send_now,exclude_id=d.pk)

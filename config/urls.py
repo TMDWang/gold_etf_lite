@@ -4,6 +4,7 @@ from django.db import connection
 from django.urls import path
 from core import auth_views as a, views as v
 from core.price_stream import quote_stream
+from core import tool_views as t
 
 def health(request):
     from core.monitor import worker_ok
@@ -39,6 +40,12 @@ urlpatterns = [
     path('api/account/sell-preview/',v.SellPreviewView.as_view()),
     path('api/account/sell-batch-preview/',v.SellBatchPreviewView.as_view()),
     path('api/account/holding-history/',v.HoldingHistoryView.as_view()),
+    path('api/account/reconciliation/',t.ReconciliationView.as_view()),
+    path('api/account/entry-preview/',t.EntryPreviewView.as_view()),
+    path('api/account/fee-preview/',t.FeePreviewView.as_view()),
+    path('api/account/reports/',t.ReportsView.as_view()),path('api/account/setup/',t.SetupView.as_view()),
+    path('api/reminders/history/',t.ReminderHistoryView.as_view()),
+    path('api/plans/<int:pk>/pause/',t.PlanPauseView.as_view()),
     path('api/entries/',v.EntriesView.as_view()),path('api/cash/',v.CashView.as_view()),path('api/entries/<int:pk>/correct/',v.CorrectView.as_view()),
     path('api/entries/export.csv',v.EntriesExportView.as_view()),
     path('api/plans/',v.PlansView.as_view()),path('api/plans/<int:pk>/',v.PlanDetailView.as_view()),path('api/plans/<int:pk>/cancel/',v.CancelPlanView.as_view()),

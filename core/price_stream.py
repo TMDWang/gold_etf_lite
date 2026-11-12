@@ -101,7 +101,9 @@ async def stream_events(session_key):
                 value=await asyncio.wait_for(queue.get(),timeout=15)
                 yield 'event: price\ndata: '+json.dumps(value,ensure_ascii=False,separators=(',',':'))+'\n\n'
             except asyncio.TimeoutError:
-                yield 'event: heartbeat\ndata: {}\n\n'
+                latest = hub.latest or {}
+                status = {key:latest.get(key) for key in ('collection', 'fresh', 'session_open', 'message') if key in latest}
+                yield 'event: heartbeat\ndata: '+json.dumps(status,ensure_ascii=False,separators=(',',':'))+'\n\n'
     finally:hub.detach(queue)
 
 @require_GET

@@ -20,6 +20,7 @@ class TradeSerializer(s.Serializer):
     occurred_at = s.DateTimeField()
     plan_id = s.IntegerField(required=False)
     plan_version = s.IntegerField(required=False)
+    ledger_revision = s.IntegerField(min_value=0, required=False)
 
     def validate(self, data):
         from django.utils import timezone
@@ -70,6 +71,16 @@ class BuyPreviewSerializer(PreviewSerializer):
 class CashSerializer(s.Serializer):
     amount = s.DecimalField(max_digits=18, decimal_places=2)
     reason = s.CharField(max_length=200)
+    category = s.ChoiceField(choices=['UNCLASSIFIED', 'DEPOSIT', 'WITHDRAW', 'INCOME', 'EXPENSE'],
+                             required=False, default='UNCLASSIFIED')
+
+    def validate(self, data):
+        category = data['category']
+        if category in ('DEPOSIT', 'INCOME') and data['amount'] < 0:
+            raise s.ValidationError('转入和分红收入须填写正数金额')
+        if category in ('WITHDRAW', 'EXPENSE') and data['amount'] > 0:
+            raise s.ValidationError('转出和账户费用须填写负数金额')
+        return data
 
     def validate_amount(self, amount):
         if not amount:

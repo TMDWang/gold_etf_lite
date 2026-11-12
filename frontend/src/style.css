@@ -43,3 +43,21 @@ html[data-theme=dark] :is(.section-error,.danger){color:#ffab9b}
 html[data-theme=dark] .text-button{color:#e2bd73}
 html[data-theme=dark] .chart-extremes strong{color:#e8deca}
 html[data-theme=dark] :is(.entry-row,.holding-main,.delivery-list,.section-error){border-color:#3a3c32}
+
+
+.filter-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0}
+.filter-field{display:flex;flex-direction:column;gap:7px;min-width:0;font-size:15px}
+.filter-field input,.filter-field select,.cash-category{box-sizing:border-box;max-width:100%;min-height:42px;padding:8px 10px;border:1px solid #dcd6c9;border-radius:9px;font:inherit;background:transparent;color:inherit}
+.filter-form .button-row{grid-column:1/-1}
+.entry-filters summary,.report-card summary,.system-diagnostics summary{cursor:pointer;font-weight:500;line-height:1.8}
+.rule-status{padding:9px 0;border-top:1px solid #e9e1d0;overflow-wrap:anywhere}
+.rule-status p{margin:6px 0}
+.account-tools .success-text{color:#4b7357}
+.account-tools .row,.report-card .row{flex-wrap:wrap;gap:8px}
+.report-card .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+.report-card .preview,.reminder-history .entry-row{overflow-wrap:anywhere}
+.setup-checklist .van-cell{padding-left:0;padding-right:0;background:transparent;min-height:46px}
+.system-diagnostics{padding-top:10px;border-top:1px solid #e9e1d0}
+html[data-theme=dark] :is(.filter-field input,.filter-field select,.cash-category,.rule-status,.system-diagnostics){border-color:#575548}
+html[data-theme=dark] .account-tools .success-text{color:#acd2b2}
+@media(max-width:440px){.filter-form{grid-template-columns:1fr}.filter-field input{width:100%}.report-card .metrics strong{font-size:18px}}

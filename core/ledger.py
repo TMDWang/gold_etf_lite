@@ -48,8 +48,9 @@ def position_snapshot(shares, cash, basis):
             'unit_cost': str(basis / shares) if shares else None}
 
 
-def ledger_steps(account):
-    rows = list(Entry.objects.filter(user_id=account.user_id).order_by('id'))
+def ledger_steps(account, rows=None):
+    if rows is None:
+        rows = list(Entry.objects.filter(user_id=account.user_id).order_by('id'))
     replacements=effective_payloads(rows)
     cash, shares, basis, realized=account.initial_cash,account.initial_shares,account.initial_cost,D('0')
     yield None, None, cash, shares, basis, realized
@@ -136,6 +137,10 @@ def post_entry(user,data,key,kind='TRADE',corrects_id=None):
     serializer=CashSerializer(data=raw) if kind=='CASH' else TradeSerializer(data=raw)
     serializer.is_valid(raise_exception=True)
     d=dict(serializer.validated_data)
+    revision = d.pop('ledger_revision', None)
+    latest = Entry.objects.filter(user=user).order_by('-id').values_list('id', flat=True).first() or 0
+    if revision is not None and revision != latest:
+        raise BusinessError('账目已变化，请重新查看成交影响后确认', 409)
     plan_id=d.pop('plan_id',None); plan_version=d.pop('plan_version',None)
     if kind=='CORRECTION' and plan_id:
         raise BusinessError('纠错不能重新绑定计划')
